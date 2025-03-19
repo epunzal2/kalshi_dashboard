@@ -4,15 +4,13 @@
 
 ```
 .
-├── .env                # Environment variables (API keys, etc.)
+├── .env                # Environment variables (API keys, base URLs, etc.)
 ├── .gitignore          # Specifies intentionally untracked files that Git should ignore
 ├── README.md           # Project documentation
 ├── requirements.txt    # List of Python dependencies
 ├── src/                # Source code directory
 │   ├── clients.py      # Kalshi API client
 │   └── main.py         # Streamlit application
-└── keys/               # Directory for storing keys
-    └── Demo_Key_1.txt  # Demo Key
 
 PROJECT IDEAS
 1. 
