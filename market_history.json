@@ -1,0 +1,230 @@
+{
+    "trades": [
+        {
+            "trade_id": "6788bc4b-801b-4986-a009-1c1d436aaa38",
+            "ticker": "NGDP-22-C7.5",
+            "count": 350,
+            "created_time": "2023-01-25T02:18:19.360549Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "2e950425-1499-428a-9d7a-c43fc30b3e66",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:37:00.739759Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "274bf91e-848b-40d8-a09c-0fa69f45503b",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:34:56.673195Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "1c05a79b-9065-4d8d-aaa3-a0b7aa12f731",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:25:25.974319Z",
+            "yes_price": 88,
+            "no_price": 12,
+            "taker_side": "yes"
+        },
+        {
+            "trade_id": "c09a53f3-615e-498e-a502-857a4b71558c",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:24:47.830678Z",
+            "yes_price": 88,
+            "no_price": 12,
+            "taker_side": "yes"
+        },
+        {
+            "trade_id": "5bc94793-4b2a-41af-811d-ddddf511034e",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:23:18.322632Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "7f45af4a-ba19-40ce-8937-71eaf31a8d91",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:23:11.263457Z",
+            "yes_price": 88,
+            "no_price": 12,
+            "taker_side": "yes"
+        },
+        {
+            "trade_id": "a14efc67-4b66-443c-8be0-c4d9d1052e2c",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:21:16.959343Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "2757b07b-68cc-4a9f-b3d3-b14121b088a4",
+            "ticker": "NGDP-22-C7.5",
+            "count": 1,
+            "created_time": "2023-01-11T20:17:54.353425Z",
+            "yes_price": 88,
+            "no_price": 12,
+            "taker_side": "yes"
+        },
+        {
+            "trade_id": "73ae2ef1-26ac-484a-8c02-a97256e9c756",
+            "ticker": "NGDP-22-C7.5",
+            "count": 20,
+            "created_time": "2023-01-07T20:49:47.674559Z",
+            "yes_price": 87,
+            "no_price": 13,
+            "taker_side": "yes"
+        },
+        {
+            "trade_id": "07a74872-75c6-47f9-955a-97e55bd919e4",
+            "ticker": "NGDP-22-C7.5",
+            "count": 134,
+            "created_time": "2023-01-07T20:49:47.674559Z",
+            "yes_price": 87,
+            "no_price": 13,
+            "taker_side": "yes"
+        },
+        {
+            "trade_id": "707870a0-04b0-4914-90c8-462011dc7627",
+            "ticker": "NGDP-22-C7.5",
+            "count": 3,
+            "created_time": "2022-11-28T16:01:50.996597Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "ffc9c05e-6c56-418d-ab67-522004889896",
+            "ticker": "NGDP-22-C7.5",
+            "count": 19,
+            "created_time": "2022-11-28T16:00:45.211974Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "e39a5e56-ee38-44e3-b432-c81aeeb6c4ad",
+            "ticker": "NGDP-22-C7.5",
+            "count": 203,
+            "created_time": "2022-11-22T20:11:44.614395Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "7ed6e93a-6487-40cd-bbf6-e627f5dbfb7f",
+            "ticker": "NGDP-22-C7.5",
+            "count": 156,
+            "created_time": "2022-11-22T20:08:38.2297Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "c416a15d-eb29-4838-bcc5-bdf66d0de310",
+            "ticker": "NGDP-22-C7.5",
+            "count": 139,
+            "created_time": "2022-11-22T18:35:43.815335Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "8d656c8c-a20f-4209-8356-3de401063f5b",
+            "ticker": "NGDP-22-C7.5",
+            "count": 14,
+            "created_time": "2022-11-22T17:41:41.513928Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "14f32fb5-a04b-4ffd-9b45-81b02870214a",
+            "ticker": "NGDP-22-C7.5",
+            "count": 31,
+            "created_time": "2022-11-22T16:15:17.401902Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "5a30ef37-08e2-4a57-80f5-d892335118b4",
+            "ticker": "NGDP-22-C7.5",
+            "count": 4,
+            "created_time": "2022-11-22T14:55:00.183319Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "dc13c8ae-cd70-4dec-aba7-f463ad6275f4",
+            "ticker": "NGDP-22-C7.5",
+            "count": 137,
+            "created_time": "2022-11-22T00:41:29.33543Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "4578f829-bcb2-48c8-b993-5ef0b54eebc0",
+            "ticker": "NGDP-22-C7.5",
+            "count": 736,
+            "created_time": "2022-11-22T00:17:03.597358Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "157435cf-c77a-4cf9-9b82-3544ef67f8ee",
+            "ticker": "NGDP-22-C7.5",
+            "count": 81,
+            "created_time": "2022-11-21T23:12:14.077768Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "f50ec832-2e5a-4e38-b472-58de4a1bb440",
+            "ticker": "NGDP-22-C7.5",
+            "count": 2,
+            "created_time": "2022-11-21T20:01:43.494093Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "5a267baf-a813-4ceb-81fa-a9638f3aaa51",
+            "ticker": "NGDP-22-C7.5",
+            "count": 134,
+            "created_time": "2022-11-21T19:49:35.968119Z",
+            "yes_price": 23,
+            "no_price": 77,
+            "taker_side": "no"
+        },
+        {
+            "trade_id": "f1f10b47-3688-419a-af9a-da2ea35a2c2e",
+            "ticker": "NGDP-22-C7.5",
+            "count": 9,
+            "created_time": "2022-10-18T19:06:09.442151Z",
+            "yes_price": 32,
+            "no_price": 68,
+            "taker_side": "no"
+        }
+    ],
+    "cursor": ""
+}
