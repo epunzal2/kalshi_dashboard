@@ -46,12 +46,12 @@ print(f"\nSpecific markets:")
 print(markets_response)
 
 # Save to JSON
-def save_to_json(data, filename="market_history.json"):
+def save_to_json(data, filename="test_outputs/market_history.json"):
     with open(filename, "w") as f:
         json.dump(data, f, indent=4)
 
 # Save to CSV
-def save_to_csv(data, filename="market_history.csv"):
+def save_to_csv(data, filename="test_outputs/market_history.csv"):
     trades = data.get('trades', [])
     if trades:
         with open(filename, "w", newline="") as f:
@@ -61,3 +61,32 @@ def save_to_csv(data, filename="market_history.csv"):
 
 save_to_json(market_history)
 save_to_csv(market_history)
+
+# Test Series
+def test_series_data():
+    series_data = http_client.get_series("KXNETFLIXRANKSHOW")
+    assert series_data is not None
+    assert 'series' in series_data
+    assert series_data['series']['ticker'] == "KXNETFLIXRANKSHOW"
+
+# Test Event
+def test_event_data():
+    event_data = http_client.get_event("KXNETFLIXRANKSHOW-25MAR17")
+    assert event_data is not None
+    assert 'event' in event_data
+    assert event_data['event']['event_ticker'] == "KXNETFLIXRANKSHOW-25MAR17"
+
+# Test Series Markets
+def test_series_markets():
+    series_data = http_client.get_series("KXNETFLIXRANKSHOW")
+    assert series_data is not None
+    assert 'series' in series_data
+    if 'markets' in series_data['series']:
+        series_markets = series_data['series']['markets']
+    else:
+        series_markets = None
+    assert series_markets is None or isinstance(series_markets, list)
+
+test_series_data()
+test_event_data()
+test_series_markets()

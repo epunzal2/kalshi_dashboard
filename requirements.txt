@@ -9,3 +9,5 @@ dateparser==1.1.8
 jupyter==1.0.0
 ipykernel==6.25.1
 pytest==7.4.0
+pydantic
+watchdog

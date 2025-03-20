@@ -1,11 +1,10 @@
 # Security & Credentials
 .env*
-.keys/
-keys/
+.keys*/
+keys*/
 
 # Project Directories
 starter/
-market_history.*
 
 # Python
 __pycache__/
