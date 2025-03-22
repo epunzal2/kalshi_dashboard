@@ -2,6 +2,7 @@ import os
 import json
 from dotenv import load_dotenv
 import unittest
+from datetime import datetime
 from cryptography.hazmat.primitives import serialization
 from src.clients import KalshiHttpClient, Environment
 
@@ -14,7 +15,8 @@ class TestMarketAPI(unittest.TestCase):
         cls.env = Environment.DEMO
         cls.key_id = os.environ.get('DEMO_KEYID')
         keyfile_path = os.environ.get('DEMO_KEYFILE')
-        
+        keyfile_path = os.path.expanduser(keyfile_path)
+
         if not cls.key_id or not keyfile_path:
             raise unittest.SkipTest("DEMO credentials not configured")
 
@@ -41,15 +43,15 @@ class TestMarketAPI(unittest.TestCase):
             self.assertIn('ticker', market)
         
         # Save results
-        output_dir = "test_outputs"
+        output_dir = "test_outputs/demo"
         os.makedirs(output_dir, exist_ok=True)
         with open(f"{output_dir}/KXCPIYOY.json", "w") as f:
             json.dump(response, f, indent=2)
 
-    def test_multiple_series_tickers(self):
+    def test_multiple_market_tickers(self):
         """Test markets endpoint with multiple series tickers"""
         response = self.client.get_markets(
-            series_ticker="KXCPIYOY,KXNETFLIXRANKSHOW"
+            tickers="FED-23DEC-T3.00,HIGHNY-22DEC23-B53.5"
         )
         
         self.assertIsInstance(response, list)
@@ -57,10 +59,12 @@ class TestMarketAPI(unittest.TestCase):
         
         # Verify at least one market from each series exists
         tickers = [m['ticker'] for m in response]
-        self.assertTrue(any("KXCPIYOY" in t for t in tickers))
-        self.assertTrue(any("KXNETFLIXRANKSHOW" in t for t in tickers))
+        self.assertTrue(any("FED-23DEC-T3.00" in t for t in tickers))
+        self.assertTrue(any("HIGHNY-22DEC23-B53.5" in t for t in tickers))
         
-        with open("test_outputs/KXCPIYOY_KXNETFLIXRANKSHOW.json", "w") as f:
+        output_dir = "test_outputs/demo"
+        os.makedirs(output_dir, exist_ok=True)
+        with open(f"{output_dir}/FED-23DEC-T3.00_HIGHNY-22DEC23-B53.5.json", "w") as f:
             json.dump(response, f, indent=2)
 
     def test_event_ticker(self):
@@ -74,8 +78,39 @@ class TestMarketAPI(unittest.TestCase):
         for market in response:
             self.assertIn("KXCPIYOY-25MAR", market['ticker'])
         
-        with open("test_outputs/KXCPIYOY-25MAR.json", "w") as f:
+        output_dir = "test_outputs/demo"
+        os.makedirs(output_dir, exist_ok=True)
+        with open(f"{output_dir}/KXCPIYOY-25MAR.json", "w") as f:
             json.dump(response, f, indent=2)
+
+    # def test_get_all_markets(self):
+    #     """Test getting all markets with no filters including timing metrics"""
+    #     start_time = datetime.now()
+        
+    #     response = self.client.get_markets()
+    #     exec_seconds = (datetime.now() - start_time).total_seconds()
+        
+    #     self.assertIsInstance(response, list)
+    #     self.assertGreater(len(response), 0)
+        
+    #     # Validate market structure
+    #     required_fields = {'ticker', 'status', 'yes_ask', 'no_bid', 'volume'}
+    #     for market in response:
+    #         self.assertTrue(required_fields.issubset(market.keys()))
+        
+    #     # Save with timestamp and metrics
+    #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #     filename = f"test_outputs/all_markets_{timestamp}_({len(response)}_markets_{exec_seconds:.1f}s).json"
+        
+    #     with open(filename, "w") as f:
+    #         json.dump({
+    #             "metadata": {
+    #                 "test_run": timestamp,
+    #                 "execution_seconds": exec_seconds,
+    #                 "market_count": len(response)
+    #             },
+    #             "markets": response
+    #         }, f, indent=2)
 
 class TestProdMarketAPI(unittest.TestCase):
     @classmethod
@@ -84,7 +119,8 @@ class TestProdMarketAPI(unittest.TestCase):
         cls.env = Environment.PROD
         cls.key_id = os.environ.get('PROD_KEYID')
         keyfile_path = os.environ.get('PROD_KEYFILE')
-        
+        keyfile_path = os.path.expanduser(keyfile_path)
+
         if not cls.key_id or not keyfile_path:
             raise unittest.SkipTest("PROD credentials not configured")
 
@@ -126,6 +162,41 @@ class TestProdMarketAPI(unittest.TestCase):
         
         with open(os.path.join(output_dir, filename), "w") as f:
             json.dump(response, f, indent=2)
+
+    def test_get_all_markets(self):
+        """Test getting all markets with no filters including timing metrics"""
+        # just test some series I'm interested in
+        series_tickers = ["KXCPIYOY", "KXNETFLIXRANKSHOW", "KXNETFLIXRANKMOVIE", "KXOSCARNOMPIC"]
+        for ticker in series_tickers:
+            # response = self.client.get_markets(series_ticker=ticker)
+            # self._validate_and_save(response, f"PROD_{ticker}.json")
+                
+            start_time = datetime.now()
+            response = self.client.get_markets(series_ticker=ticker)
+            exec_seconds = (datetime.now() - start_time).total_seconds()
+            
+            self.assertIsInstance(response, list)
+            self.assertGreater(len(response), 0)
+            
+            # Validate market structure
+            required_fields = {'ticker', 'status', 'yes_ask', 'no_bid', 'volume'}
+            for market in response:
+                self.assertTrue(required_fields.issubset(market.keys()))
+            
+            # Save with timestamp and metrics
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = os.path.join("test_outputs", "prod")
+            filename = f"{output_dir}/{ticker}_markets_{timestamp}.json"
+            
+            with open(filename, "w") as f:
+                json.dump({
+                    "metadata": {
+                        "test_run": timestamp,
+                        "execution_seconds": exec_seconds,
+                        "market_count": len(response)
+                    },
+                    "markets": response
+                }, f, indent=2)
 
 if __name__ == "__main__":
     unittest.main()

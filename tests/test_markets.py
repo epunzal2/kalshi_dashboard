@@ -11,6 +11,7 @@ load_dotenv()
 env = Environment.DEMO
 key_id = os.environ.get('DEMO_KEYID')
 keyfile_path = os.environ.get('DEMO_KEYFILE')
+keyfile_path = os.path.expanduser(keyfile_path)
 
 if not key_id or not keyfile_path:
     raise ValueError("DEMO_KEYID and DEMO_KEYFILE environment variables must be set")
@@ -21,7 +22,6 @@ with open(keyfile_path, "rb") as key_file:
         key_file.read(),
         password=None
     )
-
 
 # Initialize client
 http_client = KalshiHttpClient(key_id, private_key, env)
@@ -45,13 +45,15 @@ markets_response = http_client.get(http_client.markets_url, params=market_params
 print(f"\nSpecific markets:")
 print(markets_response)
 
+output_dir = "./test_outputs/demo"
+os.makedirs(output_dir, exist_ok=True)
 # Save to JSON
-def save_to_json(data, filename="test_outputs/market_history.json"):
+def save_to_json(data, filename=f"{output_dir}/market_history.json"):
     with open(filename, "w") as f:
         json.dump(data, f, indent=4)
 
 # Save to CSV
-def save_to_csv(data, filename="test_outputs/market_history.csv"):
+def save_to_csv(data, filename=f"{output_dir}/market_history.csv"):
     trades = data.get('trades', [])
     if trades:
         with open(filename, "w", newline="") as f:
