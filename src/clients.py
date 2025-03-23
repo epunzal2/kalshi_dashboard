@@ -44,10 +44,13 @@ class KalshiBaseClient:
         current_time_milliseconds = int(time.time() * 1000)
         timestamp_str = str(current_time_milliseconds)
         
-        print(f"\n=== Debug: Signature Components ===")
-        print(f"Timestamp: {timestamp_str}")
-        print(f"Method: {method}")
-        print(f"Path: {path}")
+        import logging
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.debug("=== Debug: Signature Components ===")
+        self.logger.debug(f"Timestamp: {timestamp_str}")
+        self.logger.debug(f"Method: {method}")
+        self.logger.debug(f"Path: {path}")
 
         path_parts = path.split('?')
         msg_string = timestamp_str + method + path_parts[0]
@@ -104,7 +107,7 @@ class KalshiHttpClient(KalshiBaseClient):
         if not 200 <= response.status_code < 300:
             response.raise_for_status()
 
-    def get(self, path: str, params: Dict[str, Any] = {}) -> Any:
+    def get(self, path: str, params: Dict[str, Any] = {}, verbose=False) -> Any:
         self.rate_limit()
         print(f"\n=== Sending GET Request ===")
         print(f"Full URL: {self.host}{path}")
@@ -114,8 +117,9 @@ class KalshiHttpClient(KalshiBaseClient):
             params=params
         )
         self.raise_if_bad_response(response)
-        print(f"\n=== Raw Response ===")
-        print(response.text)  # Add raw response logging
+        if verbose:
+            print(f"\n=== Raw Response ===")
+            print(response.text)  # Add raw response logging
         try:
             return response.json()
         except json.JSONDecodeError as e:

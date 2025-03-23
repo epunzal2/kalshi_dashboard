@@ -12,6 +12,7 @@ load_dotenv()
 env = Environment.DEMO
 key_id = os.getenv('DEMO_KEYID')
 keyfile_path = os.getenv('DEMO_KEYFILE')
+keyfile_path = os.path.expanduser(keyfile_path)
 
 # Load private key
 private_key = None  # Initialize private_key

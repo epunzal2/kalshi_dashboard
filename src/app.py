@@ -1,107 +1,100 @@
 import streamlit as st
 import requests, time, json, os
 from pydantic import BaseModel
-# from dotenv import load_dotenv
-# load_dotenv()
-
-# try:
-#     perplexity_api_key = os.environ["PERPLEXITY_API_KEY"]
-# except KeyError:
-#     st.error("Please set the PERPLEXITY_API_KEY environment variable.")
-#     st.stop()
+from src.clients import KalshiHttpClient, Environment, detect_ticker_type
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from dotenv import load_dotenv
+load_dotenv()
 
 st.header("Prediction Market Assistant")
 
 @st.cache_data 
-def load_data():
-    page_size, page, all_events = 200, 0, []
+def load_data(env=Environment.DEMO):
+    if env == Environment.DEMO:
+        key_id = os.getenv('DEMO_KEYID')
+        keyfile_path = os.getenv('DEMO_KEYFILE')
+        keyfile_path = os.path.expanduser(keyfile_path)
+    elif env == Environment.PROD:
+        key_id = os.getenv('PROD_KEYID')
+        keyfile_path = os.getenv('PROD_KEYFILE')
+        keyfile_path = os.path.expanduser(keyfile_path)
+    
+    if not key_id or not keyfile_path:
+        st.error("Missing KEYID or KEYFILE environment variables")
+        st.stop()
 
-    r = requests.get(f"https://api.elections.kalshi.com/trade-api/v2/events?limit={page_size}&with_nested_markets=true")
-    response = r.json()
-    all_events.extend(response['events'])
+    private_key = None    
+    try:
+        with open(keyfile_path, "rb") as key_file:
+            private_key = serialization.load_pem_private_key(
+                key_file.read(),
+                password=None
+            )
+    except Exception as e:
+        st.error(f"Failed to load private key: {e}")
+        st.stop()
 
-    while response['cursor'] != '':
-        r = requests.get(f"https://api.elections.kalshi.com/trade-api/v2/events?cursor={response['cursor']}&limit=200&with_nested_markets=true")
-        response = r.json()
-        all_events.extend(response['events'])     
+    client = KalshiHttpClient(
+        key_id=key_id,
+        private_key=private_key,
+        environment=env
+    )
 
-    return all_events
+    try:
+        with open("tickers.txt") as f:
+            tickers = [line.strip() for line in f if line.strip()]
+            st.write(f"Will load data for {len(tickers)} tickers.")
+            st.write(f"The tickers are: {tickers}.")
+    except FileNotFoundError:
+        st.error("tickers.txt file not found")
+        st.stop()
+
+    all_markets = []
+    for ticker in tickers:
+        ticker_type = detect_ticker_type(ticker)
+        try:
+            if ticker_type == 'series':
+                markets = client.get_markets(series_ticker=ticker)
+            else:  # Handle event tickers
+                markets = client.get_markets(event_ticker=ticker)
+            
+            all_markets.extend(markets)
+        except Exception as e:
+            st.error(f"Failed to fetch markets for {ticker}: {str(e)}")
+    
+    return all_markets
 
 start_time = time.time()
 st.write("Loading Data...")
-events = load_data()
-st.write(f"Loaded {len(events)} events in {time.time()-start_time} seconds")
+all_markets = load_data(env=Environment.PROD)
+st.write(f"Loaded {len(all_markets)} markets in {time.time()-start_time} seconds")
+st.write("Sample event structure:", all_markets[0])
 
-search = st.text_input("Search Events")
+search = st.text_input("Search Markets")
 
+# Option to display markets by category
 categories = {}
-for event in events:
-    category = event['category']
+for market in all_markets:
+    category = market['category']
     if category not in categories:
         categories[category] = []
-    categories[category].append(event)
+    categories[category].append(market)
 
-category_selectbox = st.selectbox("Categories", sorted(categories.keys()))
+category_selectbox = st.selectbox("Categories (Optional)", sorted(categories.keys()))
 
 def display_analysis(analysis):
     with st.modal("Analysis"):
         st.write(analysis)
 
-def evaluate_bet(**data):    
-    # class Contract(BaseModel):
-    #     ticker: str
-    #     side: str
-    #     bid_price: int
-    #     reason: str
-    #     confidence: int
-
-    # headers = {"Authorization": f"Bearer {perplexity_api_key}"}
-    # payload = {
-    #     "model": "sonar-reasoning-pro",
-    #     "messages": [{
-    #             "role": "system", 
-    #             "content": ("You are a prediction market assistant that must evaluate the current prices for event contracts on Kalshi. For each ticker, tell me if the 'yes' or 'no' contract is underpriced and why. Return a confidence score 0-100 so I know how confident you are in your prediction."
-    #                         "So we just need the ticker for the contract, the side 'yes' or 'no' that is underpriced, the bid price, and reason for our analysis for this contract."
-    #                         "Please output a JSON object containing the following fields: "
-    #                         "side, ticker, bid_price, reason, confidence")
-    #         },
-    #         {"role": "user", "content": data['context']},
-    #     ],
-    #     "response_format": {
-    #         "type": "json_schema", "json_schema": {"schema": Contract.model_json_schema()},
-    #     },
-    # }
-
-    # response = requests.post("https://api.perplexity.ai/chat/completions", headers=headers, json=payload).json()
-    # content = response["choices"][0]["message"]["content"]
-
-    # json_str = content.split("```json")[1].replace('```', '')
-    # try:
-    #     response_dict = json.loads(json_str)
-    #     key = list(response_dict.keys())[0]
-    #     parsed_response = {'contracts': response_dict[key]}
-    # except Exception as e:
-    #     json_str = '{"contracts": ' + json_str + '}'
-    #     parsed_response = json.loads(json_str)
-
-    # print(parsed_response)
-    # analysis = ""
-    # for contract in parsed_response['contracts']:
-    #     analysis += f"Submitting {contract['side']} order for {contract['ticker']} for {contract['bid_price']} cent. {contract['reason']}\n\n"
-
-    # display_analysis(analysis)
-    pass
-
-if search and category_selectbox:
-    context_markdown = ""
-    for event in categories[category_selectbox]:
-        if search.lower() in event['title'].lower():
+if search:
+    for market in all_markets:
+        if search.lower() in market['title'].lower():
             st.divider()
-            bet_markdown = f"#### {event['title']}\n"
-            for market in event['markets']:
-                bet_markdown += f"##### {market['yes_sub_title']} - {market['ticker']}\n"
-                bet_markdown += f"Yes Bid: {market['yes_bid']}, Yes Ask {market['yes_ask']}\n\n"
-                bet_markdown += f"No bid: {market['no_bid']}, No Ask {market['no_ask']}\n"
-
-            st.button("Evaluate Bet", key=event['event_ticker'], on_click=evaluate_bet, kwargs={"ticker": event['event_ticker'], "context": bet_markdown})
+            bet_markdown = f"##### {market['title']}\n"
+            # for market in event['markets']:
+            bet_markdown += f"###### {market['yes_sub_title']} - {market['ticker']}\n"
+            bet_markdown += f"Yes Bid: {market['yes_bid']}, Yes Ask {market['yes_ask']}\n\n"
+            bet_markdown += f"No bid: {market['no_bid']}, No Ask {market['no_ask']}\n\n"
+            bet_markdown += f"Volume (24 h): {market['volume_24h']}\n\n"
             st.markdown(bet_markdown)
