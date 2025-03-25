@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">
+  <!-- Background -->
+  <rect width="800" height="600" fill="#f8f9fa" rx="10" ry="10"/>
+  
+  <!-- Title -->
+  <text x="400" y="40" font-family="Arial" font-size="24" text-anchor="middle" font-weight="bold">Docker Compose Build and Run Workflow</text>
+  
+  <!-- Project Directory Section -->
+  <rect x="50" y="80" width="700" height="180" fill="#e9ecef" stroke="#ced4da" stroke-width="2" rx="5" ry="5"/>
+  <text x="70" y="105" font-family="Arial" font-size="18" font-weight="bold">Project Directory</text>
+  
+  <!-- Dockerfile -->
+  <rect x="80" y="120" width="180" height="120" fill="#ffffff" stroke="#2496ed" stroke-width="2" rx="5" ry="5"/>
+  <text x="170" y="145" font-family="Arial" font-size="16" text-anchor="middle" font-weight="bold">Dockerfile</text>
+  
+  <!-- Dockerfile Content -->
+  <text x="100" y="165" font-family="monospace" font-size="12">FROM python:3.9</text>
+  <text x="100" y="185" font-family="monospace" font-size="12">WORKDIR /app</text>
+  <text x="100" y="205" font-family="monospace" font-size="12">COPY requirements.txt .</text>
+  <text x="100" y="225" font-family="monospace" font-size="12">RUN pip install -r ...</text>
+  
+  <!-- docker-compose.yml -->
+  <rect x="320" y="120" width="200" height="120" fill="#ffffff" stroke="#2496ed" stroke-width="2" rx="5" ry="5"/>
+  <text x="420" y="145" font-family="Arial" font-size="16" text-anchor="middle" font-weight="bold">docker-compose.yml</text>
+  
+  <!-- docker-compose.yml Content -->
+  <text x="340" y="165" font-family="monospace" font-size="12">services:</text>
+  <text x="340" y="185" font-family="monospace" font-size="12">  kalshi-dashboard:</text>
+  <text x="340" y="205" font-family="monospace" font-size="12">    build: .</text>
+  <text x="340" y="225" font-family="monospace" font-size="12">    ports: - "8501:8501"</text>
+  
+  <!-- Source Code -->
+  <rect x="570" y="120" width="160" height="120" fill="#ffffff" stroke="#2496ed" stroke-width="2" rx="5" ry="5"/>
+  <text x="650" y="145" font-family="Arial" font-size="16" text-anchor="middle" font-weight="bold">Source Code</text>
+  <text x="650" y="185" font-family="Arial" font-size="14" text-anchor="middle">src/</text>
+  <text x="650" y="215" font-family="Arial" font-size="14" text-anchor="middle">requirements.txt</text>
+  
+  <!-- Docker Compose Build Command -->
+  <rect x="200" y="290" width="400" height="40" fill="#e6f7ff" stroke="#2496ed" stroke-width="2" rx="20" ry="20"/>
+  <text x="400" y="315" font-family="monospace" font-size="18" text-anchor="middle" font-weight="bold">docker-compose build</text>
+  
+  <!-- Arrows from Files to Command -->
+  <path d="M170 240 L350 290" stroke="#2496ed" stroke-width="3" fill="none"/>
+  <polygon points="350,290 340,280 345,290" fill="#2496ed"/>
+  
+  <path d="M420 240 L400 290" stroke="#2496ed" stroke-width="3" fill="none"/>
+  <polygon points="400,290 395,280 405,280" fill="#2496ed"/>
+  
+  <path d="M650 240 L450 290" stroke="#2496ed" stroke-width="3" fill="none"/>
+  <polygon points="450,290 455,280 445,280" fill="#2496ed"/>
+  
+  <!-- Docker Image Repository Section -->
+  <rect x="150" y="360" width="500" height="100" fill="#ffffff" stroke="#2496ed" stroke-width="2" rx="5" ry="5"/>
+  <text x="170" y="385" font-family="Arial" font-size="18" font-weight="bold">Docker Image Repository</text>
+  
+  <!-- Docker Image -->
+  <rect x="320" y="395" width="180" height="50" fill="#e6f7ff" stroke="#2496ed" stroke-width="2" rx="5" ry="5"/>
+  <text x="410" y="425" font-family="Arial" font-size="14" text-anchor="middle">kalshi-dashboard-image</text>
+  
+  <!-- Arrow from Command to Image -->
+  <path d="M400 330 L400 395" stroke="#2496ed" stroke-width="3" fill="none"/>
+  <polygon points="400,395 395,385 405,385" fill="#2496ed"/>
+  
+  <!-- Docker Compose Up Command -->
+  <rect x="200" y="490" width="400" height="40" fill="#e6f7ff" stroke="#2496ed" stroke-width="2" rx="20" ry="20"/>
+  <text x="400" y="515" font-family="monospace" font-size="18" text-anchor="middle" font-weight="bold">docker-compose up</text>
+  
+  <!-- Arrow from Image to Up Command -->
+  <path d="M400 445 L400 490" stroke="#2496ed" stroke-width="3" fill="none"/>
+  <polygon points="400,490 395,480 405,480" fill="#2496ed"/>
+  
+  <!-- Running Container -->
+  <rect x="320" y="560" width="180" height="30" fill="#e6f7ff" stroke="#2496ed" stroke-width="2" rx="5" ry="5"/>
+  <text x="410" y="580" font-family="Arial" font-size="14" text-anchor="middle">Running Container</text>
+  
+  <!-- Arrow from Up Command to Container -->
+  <path d="M400 530 L400 560" stroke="#2496ed" stroke-width="3" fill="none"/>
+  <polygon points="400,560 395,550 405,550" fill="#2496ed"/>
+</svg>

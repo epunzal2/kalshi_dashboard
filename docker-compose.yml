@@ -1,0 +1,14 @@
+version: '3.8'                # Docker Compose file format version
+services:
+  kalshi-dashboard:           # Name of your service
+    build: .                  # Use Dockerfile in current directory
+    ports:
+      - "8501:8501"           # Map port 8501 from container to host
+    volumes:
+      - ./src:/app/src        # Mount src directory into the container
+      - ~/.kalshi_keys:/app/keys:ro  # Mount keys directory as read-only
+    environment:
+      - PROD_KEYFILE=/app/keys/kalshi_prod_key.pem
+      - PROD_KEYID=${PROD_KEYID}
+      - DEMO_KEYFILE=/app/keys/kalshi_demo_key.pem
+      - DEMO_KEYID=${DEMO_KEYID}

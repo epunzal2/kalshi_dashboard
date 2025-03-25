@@ -1,11 +1,30 @@
 import streamlit as st
 import requests, time, json, os
+import logging
+import sys
+from datetime import datetime
 from pydantic import BaseModel
 from src.clients import KalshiHttpClient, Environment, detect_ticker_type
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import load_dotenv
 load_dotenv()
+
+# Configure root logger to stdout
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+# ---- Container Startup Logs ----
+logger.info("Starting Kalshi Dashboard")
+logger.info("Environment: %s", "PROD" if os.getenv('PROD_KEYID') else "DEMO")
+logger.info("Python version: %s", sys.version.split()[0])
+logger.info("Working directory: %s", os.getcwd())
+logger.info("Key file location: %s", os.path.basename(os.getenv('PROD_KEYFILE', 'demo.key')))  # Show filename only
 
 st.header("Prediction Market Assistant")
 
@@ -19,7 +38,11 @@ def load_data(env=Environment.DEMO):
         key_id = os.getenv('PROD_KEYID')
         keyfile_path = os.getenv('PROD_KEYFILE')
         keyfile_path = os.path.expanduser(keyfile_path)
-    
+
+    if not os.path.exists(keyfile_path):
+        st.error(f"Key file not found at {keyfile_path}")
+        st.stop()
+
     if not key_id or not keyfile_path:
         st.error("Missing KEYID or KEYFILE environment variables")
         st.stop()
@@ -40,6 +63,8 @@ def load_data(env=Environment.DEMO):
         private_key=private_key,
         environment=env
     )
+    logger.info("Kalshi client initialized | Environment: %s | API endpoint: %s", 
+           env.value, client.base_url)
 
     try:
         with open("tickers.txt") as f:
@@ -88,6 +113,7 @@ def display_analysis(analysis):
         st.write(analysis)
 
 if search:
+    logger.info(f"Search term entered: {search}")
     for market in all_markets:
         if search.lower() in market['title'].lower():
             st.divider()

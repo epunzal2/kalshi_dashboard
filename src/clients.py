@@ -90,6 +90,7 @@ class KalshiHttpClient(KalshiBaseClient):
     ):
         super().__init__(key_id, private_key, environment)
         self.host = self.HTTP_BASE_URL
+        self.base_url = self.HTTP_BASE_URL
         self.markets_url = "/trade-api/v2/markets"
         self.portfolio_url = "/trade-api/v2/portfolio"
         self.series_url = "/trade-api/v2/series"
