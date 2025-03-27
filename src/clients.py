@@ -135,7 +135,7 @@ class KalshiHttpClient(KalshiBaseClient):
         except HTTPError as e:
             print(f"API error: {e}")
             return None
-        
+    # public methods
     def get_api_version(self) -> str:
         """
         Fetches the API version from the Kalshi API.
@@ -144,12 +144,12 @@ class KalshiHttpClient(KalshiBaseClient):
             str: The API version as a string.
         """
         return self._get(f"{self.host}/trade-api/v2/api_version")
-
+    # portfolio methods
     def get_balance(self) -> Dict[str, Any]:
         balance = self.get(f"{self.portfolio_url}/balance")
         print(f"Raw balance response: {balance}")  # Add logging
         return balance
-
+    # market methods
     def get_trades(
         self,
         ticker: Optional[str] = None,
@@ -158,6 +158,7 @@ class KalshiHttpClient(KalshiBaseClient):
         params = {k: v for k, v in {"ticker": ticker, "limit": limit}.items() if v is not None}
         return self.get(f"{self.markets_url}/trades", params=params)
 
+    # market methods
     def get_market(self, ticker: str) -> Dict[str, Any]:
         params = {'tickers': ticker}
         try:
@@ -185,7 +186,7 @@ class KalshiHttpClient(KalshiBaseClient):
             min_close_ts: Minimum close timestamp (inclusive)
             status: Comma-separated statuses (unopened, open, closed, settled)
             tickers: Comma-separated market tickers
-            limit: Number of results per page (1-1000, default 100)
+            limit: Number of results per page (1-1000, default self.rate_limit())
             
         Returns:
             List of market dictionaries
@@ -235,6 +236,13 @@ class KalshiHttpClient(KalshiBaseClient):
     def get_series_markets(self, series_ticker: str) -> dict:
         """Get all markets associated with a series"""
         return self._get(f"{self.series_url}/{series_ticker}/markets")
+
+    def get_market_orderbook(self, ticker: str, depth: int) -> dict:
+        params = {
+            'ticker': ticker,
+            'depth': depth
+        }
+        return self._get(f"{self.markets_url}/orderbook", params=params)
 
 class KalshiWebSocketClient(KalshiBaseClient):
     def __init__(
@@ -303,8 +311,16 @@ def detect_ticker_type(ticker: str) -> str:
     if '-' not in ticker:
         if ticker.startswith('KX'):
             return 'series'
-        return 'market'  # Handle edge cases
+        return 'market'
+    
     parts = ticker.split('-')
-    if len(parts) == 3 and ticker.startswith('KX'):
+    
+    # Handle event tickers (one hyphen)
+    if len(parts) == 2 and ticker.startswith('KX'):
         return 'event'
-    return 'market'
+    
+    # Handle market tickers (two hyphens)
+    if len(parts) == 3 and ticker.startswith('KX'):
+        return 'market'
+    
+    return 'market'  # Default case
