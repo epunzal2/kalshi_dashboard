@@ -139,6 +139,7 @@ def fetch_and_save_markets(client, tickers):
     error_count = 0
 
     for ticker_input in tickers:
+        logger.info(f"Processing ticker from file: {ticker_input}") # Confirm processing start
         ticker_type = detect_ticker_type(ticker_input)
         markets = []
         try:
