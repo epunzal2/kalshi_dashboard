@@ -3,17 +3,19 @@ import logging
 import sys
 import json
 from datetime import datetime, timezone
-from dotenv import load_dotenv
+from dotenv import load_dotenv # Keep for local mode
 from cryptography.hazmat.primitives import serialization
 import google.cloud.secretmanager as secretmanager
+from google.cloud import storage # Added for GCS
+from flask import Flask, request, jsonify # Added for Flask
 from src.clients import KalshiHttpClient, Environment, detect_ticker_type
 
 # ---- Configuration ----
-load_dotenv()
+load_dotenv() # Load .env file for local development
 
 # Configure root logger to stdout
 logging.basicConfig(
-    stream=sys.stdout,
+    stream=sys.stdout, # Cloud Run logs to stdout by default
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
@@ -21,36 +23,65 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---- Constants ----
-MARKET_DATA_DIR = "market_data"
-TICKER_FILE = "tickers.txt"
+LOCAL_MODE = os.getenv("LOCAL_MODE", "false").lower() == "true"
+MARKET_DATA_DIR = "market_data" # Used only in local mode
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "kalshi-market-data-storage") # Get from env var
+GCS_BASE_PATH = "market_data" # Base 'folder' in GCS
+TICKER_FILE = "tickers.txt" # Assumed to be in the container's working directory
+
+# ---- Flask App Setup ----
+app = Flask(__name__)
+
+# ---- Google Cloud Clients ----
+# Initialize clients only if not in local mode to avoid unnecessary auth attempts locally
+secret_manager_client = None
+storage_client = None
+if not LOCAL_MODE:
+    try:
+        secret_manager_client = secretmanager.SecretManagerServiceClient()
+        storage_client = storage.Client() # Assumes ADC or service account credentials
+        logger.info("Initialized Google Cloud clients.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Google Cloud clients: {e}. Ensure credentials are set up correctly for non-local mode.")
+        # Depending on requirements, might want to raise here or handle later
 
 # ---- Secret Manager Functions ----
 def access_secret_version(secret_id, version_id="latest"):
     """Access a secret stored in Google Cloud Secret Manager."""
-    # TODO: Replace 'kalshi-dashboard-gcp' with your actual GCP project ID if different
-    project_id = os.getenv("GCP_PROJECT_ID", "kalshi-dashboard-gcp")
-    client = secretmanager.SecretManagerServiceClient()
+    if LOCAL_MODE:
+        logger.error("Secret Manager access is not supported in LOCAL_MODE.")
+        raise NotImplementedError("Secret Manager access is disabled in LOCAL_MODE.")
+    if not secret_manager_client:
+        raise RuntimeError("Secret Manager client not initialized.")
+
+    project_id = os.getenv("GOOGLE_CLOUD_PROJECT") # Use standard Cloud Run env var
+    if not project_id:
+        # Fallback for local testing if GOOGLE_CLOUD_PROJECT isn't set but gcloud is configured
+        project_id = os.getenv("GCP_PROJECT_ID", "kalshi-dashboard-gcp")
+        logger.warning(f"GOOGLE_CLOUD_PROJECT not set, falling back to GCP_PROJECT_ID: {project_id}")
+        if not project_id:
+             raise ValueError("Could not determine GCP Project ID.")
+
     name = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
     try:
-        response = client.access_secret_version(name=name)
+        response = secret_manager_client.access_secret_version(name=name)
         logger.info(f"Successfully accessed secret: {secret_id}")
         return response.payload.data.decode("UTF-8")
     except Exception as e:
         logger.error(f"Failed to access secret {secret_id} in project {project_id}: {e}")
-        # In a script, we might want to raise the exception or exit
-        raise  # Re-raise the exception to halt execution if secrets are critical
+        raise  # Re-raise the exception
 
 # ---- Kalshi Client Functions ----
 def load_client(env=Environment.PROD):
     """Initialize the Kalshi HTTP client with appropriate credentials."""
-    local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
-    logger.info(f"Initializing Kalshi client in {'local' if local_mode else 'gcloud'} mode for environment: {env.value}")
+    # Use the global LOCAL_MODE constant
+    logger.info(f"Initializing Kalshi client in {'local' if LOCAL_MODE else 'gcloud'} mode for environment: {env.value}")
 
     key_id = None
     private_key = None
 
     try:
-        if local_mode:
+        if LOCAL_MODE:
             # Local development mode - load keys from environment variables and files
             logger.info("Using local mode credentials")
             if env == Environment.DEMO:
@@ -202,17 +233,36 @@ def fetch_and_save_markets(client, tickers):
                     # Add fetch timestamp
                     market['fetch_timestamp'] = fetch_timestamp_str
 
-                    # Define directory and file path using potentially updated series_ticker
-                    market_dir = os.path.join(MARKET_DATA_DIR, series_ticker, event_ticker)
-                    market_file = os.path.join(market_dir, f"{market_ticker}.json")
+                    # --- Saving Logic ---
+                    if LOCAL_MODE:
+                        # Save locally
+                        market_dir_local = os.path.join(MARKET_DATA_DIR, series_ticker, event_ticker)
+                        market_file_local = os.path.join(market_dir_local, f"{market_ticker}.json")
+                        os.makedirs(market_dir_local, exist_ok=True)
+                        with open(market_file_local, 'w') as f:
+                            json.dump(market, f, indent=2)
+                        logger.debug(f"Saved market data locally to {market_file_local}")
+                    else:
+                        # Save to GCS
+                        if not storage_client:
+                             logger.error("Storage client not initialized. Cannot save to GCS.")
+                             raise RuntimeError("Storage client not initialized.")
+                        try:
+                            bucket = storage_client.bucket(GCS_BUCKET_NAME)
+                            # Construct GCS path: market_data/series_ticker/event_ticker/market_ticker.json
+                            blob_name = f"{GCS_BASE_PATH}/{series_ticker}/{event_ticker}/{market_ticker}.json"
+                            blob = bucket.blob(blob_name)
+                            # Upload data as JSON string
+                            blob.upload_from_string(
+                                data=json.dumps(market, indent=2),
+                                content_type='application/json'
+                            )
+                            logger.debug(f"Saved market data to GCS: gs://{GCS_BUCKET_NAME}/{blob_name}")
+                        except Exception as gcs_e:
+                            logger.error(f"Failed to save market {market_ticker} to GCS: {gcs_e}")
+                            error_count += 1 # Increment error count for GCS save failure
+                            continue # Skip saved_count increment for this market
 
-                    # Create directories if they don't exist
-                    os.makedirs(market_dir, exist_ok=True)
-
-                    # Save data to JSON file
-                    with open(market_file, 'w') as f:
-                        json.dump(market, f, indent=2)
-                    logger.debug(f"Saved market data to {market_file}")
                     saved_count += 1
 
                 except Exception as e:
@@ -226,29 +276,64 @@ def fetch_and_save_markets(client, tickers):
     logger.info(f"Market data fetch completed. Saved: {saved_count}, Errors: {error_count}")
     return saved_count, error_count
 
-# ---- Main Execution ----
-if __name__ == "__main__":
-    logger.info("Starting data fetcher script")
+# ---- Flask HTTP Endpoint ----
+@app.route('/run', methods=['POST'])
+def run_fetcher():
+    """Flask endpoint triggered by Cloud Scheduler."""
+    logger.info("Received request to run data fetcher.")
     start_time = datetime.now()
 
     try:
         # Determine environment (e.g., based on an env var, default to PROD if not set)
+        # Note: KALSHI_ENV should be set as an environment variable in Cloud Run
         env_str = os.getenv("KALSHI_ENV", "PROD").upper()
         kalshi_env = Environment.PROD if env_str == "PROD" else Environment.DEMO
+        logger.info(f"Using Kalshi environment: {kalshi_env.value}")
+
+        # Ensure clients are initialized if not in local mode
+        if not LOCAL_MODE and (not secret_manager_client or not storage_client):
+             logger.error("Cloud clients were not initialized properly.")
+             return jsonify({"status": "error", "message": "Cloud client initialization failed"}), 500
 
         client = load_client(env=kalshi_env)
-        tickers_to_fetch = load_tickers()
+        tickers_to_fetch = load_tickers() # Reads from TICKER_FILE in cwd
 
         if not tickers_to_fetch:
-            logger.warning("No tickers loaded, exiting.")
+            logger.warning("No tickers loaded.")
+            message = "No tickers loaded"
+            saved_count = 0
+            error_count = 0
         else:
-            fetch_and_save_markets(client, tickers_to_fetch)
+            saved_count, error_count = fetch_and_save_markets(client, tickers_to_fetch)
+            message = f"Fetch completed. Saved: {saved_count}, Errors: {error_count}"
 
+        end_time = datetime.now()
+        duration = end_time - start_time
+        logger.info(f"Data fetcher run finished in {duration}. {message}")
+
+        # Return success response
+        return jsonify({
+            "status": "success",
+            "message": message,
+            "saved_count": saved_count,
+            "error_count": error_count,
+            "duration_seconds": duration.total_seconds()
+        }), 200
+
+    except FileNotFoundError as e:
+         logger.error(f"Critical error: Ticker file '{TICKER_FILE}' not found.", exc_info=True)
+         return jsonify({"status": "error", "message": f"Ticker file not found: {e}"}), 500
+    except NotImplementedError as e:
+         logger.error(f"Configuration error: {e}", exc_info=True)
+         return jsonify({"status": "error", "message": str(e)}), 500
     except Exception as e:
-        logger.critical(f"Script failed with unhandled exception: {type(e).__name__} - {str(e)}", exc_info=True)
-        sys.exit(1) # Exit with error code
+        logger.critical(f"Fetcher run failed with unhandled exception: {type(e).__name__} - {str(e)}", exc_info=True)
+        # Return error response
+        return jsonify({"status": "error", "message": f"Unhandled exception: {str(e)}"}), 500
 
-    end_time = datetime.now()
-    duration = end_time - start_time
-    logger.info(f"Data fetcher script finished in {duration}")
-    sys.exit(0) # Exit successfully
+# Note: The 'if __name__ == "__main__":' block is removed.
+# Gunicorn will be used to run the Flask app in the Docker container.
+# For local testing (python src/data_fetcher.py), you might add:
+# if __name__ == "__main__":
+#     # For local debugging only - Cloud Run uses Gunicorn
+#     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)

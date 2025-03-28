@@ -11,3 +11,6 @@ pytest==7.4.0
 pydantic
 watchdog
 google-cloud-secret-manager
+Flask
+gunicorn
+google-cloud-storage
