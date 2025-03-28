@@ -7,6 +7,10 @@ KALSHI*
 # Project Directories
 starter/
 market_data/
+.clinerules
+TODO.md
+cloud/
+tests/*png
 
 # Python
 __pycache__/

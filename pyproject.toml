@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalshi-dashboard"  # Replace with your actual project name
+version = "0.1.0"
+description = "Use Kalshi API to create a dashboard"
+requires-python = ">=3.7"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
