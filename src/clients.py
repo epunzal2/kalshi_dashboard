@@ -229,9 +229,14 @@ class KalshiHttpClient(KalshiBaseClient):
         else:
             return {'series': None}
 
-    def get_event(self, event_ticker: str) -> dict:
+    def get_event(self, event_ticker: str, with_nested_markets: bool = False) -> dict:
         """Get event details with market list like starter's get_event()"""
-        return self._get(f"{self.events_url}/{event_ticker}")
+        params = {'event_ticker': event_ticker,
+                  'with_nested_markets': with_nested_markets
+        }
+        # Call self.get directly as it handles params
+        event_data = self.get(f"{self.events_url}/{event_ticker}", params=params)
+        return event_data
 
     def get_series_markets(self, series_ticker: str) -> dict:
         """Get all markets associated with a series"""

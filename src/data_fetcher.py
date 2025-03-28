@@ -164,10 +164,36 @@ def fetch_and_save_markets(client, tickers):
                     series_ticker_from_input = ticker_input if ticker_type == 'series' else None
                     event_ticker_from_input = ticker_input if ticker_type == 'event' else None
 
-                    # Use the input ticker if the market data doesn't have it, otherwise use market data or default
-                    series_ticker = series_ticker_from_input or market.get('series_ticker', 'unknown_series')
-                    event_ticker = event_ticker_from_input or market.get('event_ticker', 'unknown_event')
-                    market_ticker = market.get('ticker', 'unknown_market')
+                    # Determine the correct series/event based on the INPUT ticker type
+                    series_ticker_from_input = ticker_input if ticker_type == 'series' else None
+                    event_ticker_from_input = ticker_input if ticker_type == 'event' else None
+
+                    # Get initial values from market data or input
+                    series_ticker = series_ticker_from_input or market.get('series_ticker')
+                    event_ticker = event_ticker_from_input or market.get('event_ticker')
+                    market_ticker = market.get('ticker')
+
+                    # --- Fallback logic for missing series_ticker ---
+                    if not series_ticker and event_ticker:
+                        logger.debug(f"Market {market_ticker} missing series_ticker, attempting fallback via get_event({event_ticker})")
+                        try:
+                            event_details = client.get_event(event_ticker=event_ticker)
+                            if event_details and 'event' in event_details and 'series_ticker' in event_details['event']:
+                                series_ticker = event_details['event']['series_ticker']
+                                logger.debug(f"Found series_ticker '{series_ticker}' for event {event_ticker}")
+                                # Optionally add the found series_ticker back to the market data dict
+                                market['series_ticker'] = series_ticker
+                            else:
+                                logger.warning(f"get_event response for {event_ticker} missing expected structure or series_ticker. Response: {event_details}")
+                        except Exception as event_err:
+                            logger.error(f"Failed to get event details for {event_ticker} to find series_ticker: {event_err}")
+                    # --- End Fallback logic ---
+
+                    # Use defaults if still missing after fallback
+                    series_ticker = series_ticker or 'unknown_series'
+                    event_ticker = event_ticker or 'unknown_event'
+                    market_ticker = market_ticker or 'unknown_market'
+
 
                     if market_ticker == 'unknown_market':
                         logger.warning(f"Market data missing 'ticker' field for item under {ticker_input}. Data: {market}")
@@ -176,7 +202,7 @@ def fetch_and_save_markets(client, tickers):
                     # Add fetch timestamp
                     market['fetch_timestamp'] = fetch_timestamp_str
 
-                    # Define directory and file path
+                    # Define directory and file path using potentially updated series_ticker
                     market_dir = os.path.join(MARKET_DATA_DIR, series_ticker, event_ticker)
                     market_file = os.path.join(market_dir, f"{market_ticker}.json")
 

@@ -1,13 +1,13 @@
 import streamlit as st
-import requests
 import time
 import json
 import os
 import logging
 import sys
-from datetime import datetime
+import subprocess
+from datetime import datetime, timezone
 from pydantic import BaseModel
-from src.clients import KalshiHttpClient, Environment, detect_ticker_type
+from src.clients import detect_ticker_type
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 import google.cloud.secretmanager as secretmanager
@@ -45,67 +45,69 @@ def access_secret_version(secret_id, version_id="latest"):
         st.error(f"Failed to access secret {secret_id}: {e}")
         st.stop()
 
-# ---- Kalshi Client Functions ----
-def load_client(env=Environment.PROD):
-    """Initialize the Kalshi HTTP client with appropriate credentials."""
-    local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
-    logger.info(f"Initializing Kalshi client in {'local' if local_mode else 'gcloud'} mode")
-    
-    try:
-        if local_mode:
-            # Local development mode - load keys from environment variables and files
-            if env == Environment.DEMO:
-                key_id = os.getenv('DEMO_KEYID')
-                keyfile_path = os.path.expanduser(os.getenv('DEMO_KEYFILE'))
-                
-                with open(keyfile_path, "rb") as key_file:
-                    private_key = serialization.load_pem_private_key(
-                        key_file.read(),
-                        password=None
-                    )
-            elif env == Environment.PROD:
-                key_id = os.getenv('PROD_KEYID')
-                keyfile_path = os.path.expanduser(os.getenv('PROD_KEYFILE'))
-                
-                with open(keyfile_path, "rb") as key_file:
-                    private_key = serialization.load_pem_private_key(
-                        key_file.read(),
-                        password=None
-                    )
-        else:
-            # Cloud mode - load keys from Secret Manager
-            if env == Environment.DEMO:
-                logger.error("Demo mode not supported with GCP secrets")
-                st.error("Demo mode not supported with GCP secrets")
-                st.stop()
-            elif env == Environment.PROD:
-                key_id = access_secret_version("prod-keyid")
-                private_key_pem = access_secret_version("prod-keyfile")
-                
-                private_key = serialization.load_pem_private_key(
-                    private_key_pem.encode('utf-8'),
-                    password=None
-                )
-        
-        # Create the Kalshi client with the loaded credentials
-        client = KalshiHttpClient(
-            key_id=key_id,
-            private_key=private_key,
-            environment=env
-        )
-        
-        logger.info("Kalshi client initialized | Environment: %s | API endpoint: %s",
-                  env.value, client.base_url)
-        return client
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize Kalshi client: {type(e).__name__} - {str(e)}")
-        st.error(f"Failed to initialize Kalshi client: {type(e).__name__}")
-        st.stop()
-
 # ---- Data Loading Functions ----
 @st.cache_data
-def load_tickers(file="tickers.txt"):
+def load_markets_from_disk(data_dir="/app/market_data"):
+    """Load market data from structured JSON files in the specified directory."""
+    all_markets = []
+    logger.info(f"Loading market data from disk: {data_dir}")
+    start_time = time.time()
+
+    for root, dirs, files in os.walk(data_dir):
+        for file in files:
+            if file.endswith(".json"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, 'r') as f:
+                        market_data = json.load(f)
+                        all_markets.append(market_data)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to load JSON from {file_path}: {e}")
+                except Exception as e:
+                    logger.error(f"Error reading file {file_path}: {e}")
+
+    load_time = time.time() - start_time
+    logger.info(f"Loaded {len(all_markets)} markets from disk in {load_time:.2f} seconds")
+    return all_markets
+
+
+@st.cache_data
+def check_data_freshness(data_dir="/app/market_data", freshness_threshold_hours=1):
+    """Check if market data in data_dir is fresh based on fetch_timestamp."""
+    logger.info(f"Checking data freshness in: {data_dir}")
+    if not os.path.exists(data_dir) or not os.listdir(data_dir):
+        logger.info(f"Data directory '{data_dir}' is empty or does not exist, data is not fresh.")
+        return False
+
+    latest_fetch_timestamp = None
+    for root, dirs, files in os.walk(data_dir):
+        for file in files:
+            if file.endswith(".json"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, 'r') as f:
+                        market_data = json.load(f)
+                        timestamp_str = market_data.get('fetch_timestamp')
+                        if timestamp_str:
+                            # Parse the string and make it timezone-aware (UTC)
+                            naive_dt = datetime.strptime(timestamp_str, '%Y-%m-%dT%H:%M:%SZ')
+                            file_fetch_time = naive_dt.replace(tzinfo=timezone.utc)
+                            if latest_fetch_timestamp is None or file_fetch_time > latest_fetch_timestamp:
+                                latest_fetch_timestamp = file_fetch_time
+                except Exception as e:
+                    logger.error(f"Error reading timestamp from {file_path}: {e}")
+
+    if latest_fetch_timestamp:
+        hours_diff = (datetime.now(timezone.utc) - latest_fetch_timestamp).total_seconds() / 3600
+        is_fresh = hours_diff <= freshness_threshold_hours
+        logger.info(f"Latest data fetch timestamp: {latest_fetch_timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}, Data is {'fresh' if is_fresh else 'stale'} ({hours_diff:.2f} hours old, threshold={freshness_threshold_hours} hours)")
+        return is_fresh
+    else:
+        logger.info("No fetch timestamps found in data directory, data is not fresh.")
+        return False
+
+
+def load_tickers(file="tickers.txt"): # Keep load_tickers for now, might be used later
     """Load ticker symbols from file."""
     try:
         with open(file) as f:
@@ -117,39 +119,6 @@ def load_tickers(file="tickers.txt"):
         st.error(f"Ticker file not found: {file}")
         st.stop()
 
-@st.cache_data
-def fetch_markets_data(_client, tickers):
-    """Fetch market data for all tickers."""
-    all_markets = []
-    errors = []
-    
-    for ticker in tickers:
-        ticker_type = detect_ticker_type(ticker)
-        try:
-            if ticker_type == 'series':
-                markets = _client.get_markets(series_ticker=ticker)
-                # Add series_ticker to each market if not already present
-                for market in markets:
-                    if 'series_ticker' not in market:
-                        market['series_ticker'] = ticker
-            else:  # Handle event tickers
-                markets = _client.get_markets(event_ticker=ticker)
-                # Ensure event_ticker is explicitly set in each market
-                for market in markets:
-                    if 'event_ticker' not in market:
-                        market['event_ticker'] = ticker
-
-            all_markets.extend(markets)
-            logger.info(f"Fetched {len(markets)} markets for ticker {ticker}")
-        except Exception as e:
-            error_msg = f"Failed to fetch markets for {ticker}: {str(e)}"
-            logger.error(error_msg)
-            errors.append(error_msg)
-    
-    if errors:
-        st.warning(f"Encountered {len(errors)} errors while fetching market data")
-    
-    return all_markets
 
 # ---- UI Rendering Functions ----
 def display_market_card(market):
@@ -198,72 +167,79 @@ def display_analysis(analysis):
     with st.modal("Analysis"):
         st.write(analysis)
 
-# ---- Main Application ----
-def main():
-    st.header("Kalshi Prediction Market Dashboard")
-    
-@st.cache_data(ttl=86400, persist="disk")  # Cache data for 1 day (24 hours * 60 minutes * 60 seconds)
-def fetch_markets_data(_client, tickers):
-    """Fetch market data for all tickers."""
-    all_markets = []
-    errors = []
-    
-    for ticker in tickers:
-        ticker_type = detect_ticker_type(ticker)
-        try:
-            if ticker_type == 'series':
-                markets = _client.get_markets(series_ticker=ticker)
-                # Add series_ticker to each market if not already present
-                for market in markets:
-                    if 'series_ticker' not in market:
-                        market['series_ticker'] = ticker
-            else:  # Handle event tickers
-                markets = _client.get_markets(event_ticker=ticker)
-                # Ensure event_ticker is explicitly set in each market
-                for market in markets:
-                    if 'event_ticker' not in market:
-                        market['event_ticker'] = ticker
-
-            all_markets.extend(markets)
-            logger.info(f"Fetched {len(markets)} markets for ticker {ticker}")
-        except Exception as e:
-            error_msg = f"Failed to fetch markets for {ticker}: {str(e)}"
-            logger.error(error_msg)
-            errors.append(error_msg)
-    
-    if errors:
-        logger.warning(f"Encountered {len(errors)} errors while fetching market data")
-    
-    return all_markets
-
 def main():
     st.header("Prediction Market Assistant")
     
-    # Add refresh button at the top
-    if st.button("🔄 Refresh Market Data"):
-        st.write("Clearing cache and refreshing data...")
-        # Clear the cached data
-        fetch_markets_data.clear()
-        st.experimental_rerun()
+    st.write("Data is loaded from disk, updated periodically by `src/data_fetcher.py`.")
+    st.write("Refresh this page to reload market data, possibly triggering data fetch if needed.")
     st.divider()
 
-    # Initialize client
-    start_time = time.time()
-    st.write("Loading Data...")
-    client = load_client()
-    
-    # Load tickers and market data
-    tickers = load_tickers()
-    st.write(f"Will load data for {len(tickers)} tickers.")
-    st.write(f"The tickers are: {tickers}.")
-    
-    all_markets = fetch_markets_data(client, tickers)
-    
-    load_time = time.time() - start_time
-    st.write(f"Loaded {len(all_markets)} markets in {load_time:.2f} seconds")
-    
-    if len(all_markets) > 0:
-        st.write("Sample market structure:", all_markets[-1])
+    # Check data freshness and load/fetch accordingly
+    data_dir = "/app/market_data"
+    all_markets = [] # Initialize empty list
+
+    if check_data_freshness(data_dir):
+        st.write("Market data is fresh.")
+        # Load fresh data from disk
+        start_time = time.time()
+        st.write("Loading Market Data from Disk...")
+        all_markets = load_markets_from_disk(data_dir)
+        load_time = time.time() - start_time
+        st.write(f"Loaded {len(all_markets)} markets from disk in {load_time:.2f} seconds")
+    else:
+        st.write("Market data is not fresh, fetching new data...")
+        fetcher_start_time = time.time()
+        
+        command = f"{sys.executable} src/data_fetcher.py" # Use sys.executable
+        logger.info(f"Executing data fetcher: {command}")
+        
+        try:
+            # Execute data_fetcher.py
+            subprocess.run([sys.executable, 'src/data_fetcher.py'], check=True, capture_output=True, text=True) # Capture output
+            
+            fetcher_duration = time.time() - fetcher_start_time
+            st.write(f"Data fetcher script executed in {fetcher_duration:.2f} seconds.")
+            st.success("Data fetch successful.")
+
+            # Now load the newly fetched data
+            st.write("Loading newly fetched Market Data from Disk...")
+            start_time = time.time()
+            all_markets = load_markets_from_disk(data_dir) # Load data after fetch
+            load_time = time.time() - start_time
+            st.write(f"Loaded {len(all_markets)} markets from disk in {load_time:.2f} seconds")
+
+        except subprocess.CalledProcessError as e:
+            st.error(f"Error running data fetcher: {e}")
+            logger.error(f"Data fetcher failed. Return code: {e.returncode}")
+            logger.error(f"Stdout: {e.stdout}")
+            logger.error(f"Stderr: {e.stderr}")
+            st.text_area("Fetcher Error Output", e.stderr, height=200)
+            st.warning("Could not fetch fresh data. Dashboard may be empty or display stale information if available.")
+            # Attempt to load potentially stale data as a fallback if fetch fails
+            if os.path.exists(data_dir) and os.listdir(data_dir):
+                 st.write("Attempting to load existing (stale) data...")
+                 all_markets = load_markets_from_disk(data_dir)
+            else:
+                 st.error("No market data available.")
+                 st.stop() # Stop if fetch fails and no prior data exists
+
+        except Exception as e:
+            st.error(f"An unexpected error occurred during data fetch: {e}")
+            logger.error(f"Unexpected error during data fetch: {e}", exc_info=True)
+            st.warning("Could not fetch fresh data due to an unexpected error.")
+            # Attempt to load potentially stale data as a fallback
+            if os.path.exists(data_dir) and os.listdir(data_dir):
+                 st.write("Attempting to load existing (stale) data...")
+                 all_markets = load_markets_from_disk(data_dir)
+            else:
+                 st.error("No market data available.")
+                 st.stop() # Stop if fetch fails unexpectedly and no prior data exists
+
+    # Display sample structure only if data was successfully loaded
+    if all_markets: # Check if list is not empty
+        st.write("Sample market structure (loaded):", all_markets[-1])
+    elif not trigger_data_fetch: # Only show if not attempting fetch
+         st.warning("No market data loaded.")
     
     # Search functionality
     search = st.text_input("Search Markets")

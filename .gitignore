@@ -6,6 +6,7 @@ KALSHI*
 
 # Project Directories
 starter/
+market_data/
 
 # Python
 __pycache__/
@@ -36,6 +37,7 @@ wheels/
 *.swo
 *~
 .DS_Store
+.clineignore
 
 # Jupyter
 .ipynb_checkpoints/
