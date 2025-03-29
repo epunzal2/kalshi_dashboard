@@ -21,4 +21,4 @@ EXPOSE 8080
 # Run the web server
 # Use JSON format for CMD to address the warning
 # CMD gunicorn --chdir /app --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 0 src.data_fetcher:app
-CMD gunicorn --chdir /app --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 0 src.minimal_app:app
+CMD gunicorn --chdir /app --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 0 src.data_fetcher:app
