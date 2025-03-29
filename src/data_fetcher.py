@@ -74,7 +74,8 @@ def access_secret_version(secret_id, version_id="latest"):
     try:
         response = secret_manager_client.access_secret_version(name=name)
         logger.info(f"Successfully accessed secret: {secret_id}")
-        return response.payload.data.decode("UTF-8")
+        # Decode and strip leading/trailing whitespace (like newlines)
+        return response.payload.data.decode("UTF-8").strip()
     except Exception as e:
         logger.error(f"Failed to access secret {secret_id} in project {project_id}: {e}")
         raise  # Re-raise the exception
