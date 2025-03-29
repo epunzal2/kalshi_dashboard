@@ -8,6 +8,10 @@ from cryptography.hazmat.primitives import serialization
 import google.cloud.secretmanager as secretmanager
 from google.cloud import storage # Added for GCS
 from flask import Flask, request, jsonify # Added for Flask
+import traceback # Import traceback
+
+print("--- data_fetcher.py START ---", flush=True) # <<< ADDED
+
 from src.clients import KalshiHttpClient, Environment, detect_ticker_type
 
 # ---- Configuration ----
@@ -30,20 +34,24 @@ GCS_BASE_PATH = "market_data" # Base 'folder' in GCS
 TICKER_FILE = "tickers.txt" # Assumed to be in the container's working directory
 
 # ---- Flask App Setup ----
-app = Flask(__name__)
+# Moved initialization after client setup to ensure clients are attempted first
 
 # ---- Google Cloud Clients ----
-# Initialize clients only if not in local mode to avoid unnecessary auth attempts locally
+# Initialize as None at the top level. Actual initialization will be deferred.
 secret_manager_client = None
 storage_client = None
-if not LOCAL_MODE:
-    try:
-        secret_manager_client = secretmanager.SecretManagerServiceClient()
-        storage_client = storage.Client() # Assumes ADC or service account credentials
-        logger.info("Initialized Google Cloud clients.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Google Cloud clients: {e}. Ensure credentials are set up correctly for non-local mode.")
-        # Depending on requirements, might want to raise here or handle later
+print(f"--- Top-level script execution (LOCAL_MODE={LOCAL_MODE}) ---", flush=True) # <<< MODIFIED
+
+# Removed top-level client initialization block
+
+print("--- Flask App Initialization START ---", flush=True) # <<< ADDED
+try:
+    app = Flask(__name__)
+    print("--- Flask App Initialization SUCCESS ---", flush=True) # <<< ADDED
+except Exception as e:
+    print(f"--- CRITICAL ERROR initializing Flask app: {e} ---", flush=True) # <<< ADDED
+    print(traceback.format_exc(), flush=True) # <<< ADDED
+    raise SystemExit("Failed to initialize Flask app") # Force exit if Flask fails
 
 # ---- Secret Manager Functions ----
 def access_secret_version(secret_id, version_id="latest"):
@@ -233,35 +241,79 @@ def fetch_and_save_markets(client, tickers):
                     # Add fetch timestamp
                     market['fetch_timestamp'] = fetch_timestamp_str
 
-                    # --- Saving Logic ---
+                    # --- Saving Logic (Append Mode) ---
+                    market_data_list = []
                     if LOCAL_MODE:
-                        # Save locally
+                        # Append locally
                         market_dir_local = os.path.join(MARKET_DATA_DIR, series_ticker, event_ticker)
                         market_file_local = os.path.join(market_dir_local, f"{market_ticker}.json")
                         os.makedirs(market_dir_local, exist_ok=True)
-                        with open(market_file_local, 'w') as f:
-                            json.dump(market, f, indent=2)
-                        logger.debug(f"Saved market data locally to {market_file_local}")
+                        try:
+                            if os.path.exists(market_file_local):
+                                with open(market_file_local, 'r') as f:
+                                    content = f.read()
+                                    if content: # Avoid error on empty file
+                                        market_data_list = json.loads(content)
+                                        if not isinstance(market_data_list, list):
+                                            logger.warning(f"Existing local file {market_file_local} is not a JSON list. Overwriting.")
+                                            market_data_list = []
+                        except json.JSONDecodeError:
+                            logger.warning(f"Could not decode JSON from existing local file {market_file_local}. Overwriting.")
+                            market_data_list = []
+                        except Exception as read_err:
+                             logger.error(f"Error reading local file {market_file_local}: {read_err}. Overwriting.")
+                             market_data_list = []
+
+                        market_data_list.append(market) # Append the new market data
+
+                        try:
+                            with open(market_file_local, 'w') as f: # Overwrite with updated list
+                                json.dump(market_data_list, f, indent=2)
+                            logger.debug(f"Appended market data locally to {market_file_local}")
+                        except Exception as write_err:
+                             logger.error(f"Error writing local file {market_file_local}: {write_err}")
+                             error_count += 1
+                             continue # Skip saved_count increment
+
                     else:
-                        # Save to GCS
+                        # Append to GCS
                         if not storage_client:
                              logger.error("Storage client not initialized. Cannot save to GCS.")
                              raise RuntimeError("Storage client not initialized.")
                         try:
                             bucket = storage_client.bucket(GCS_BUCKET_NAME)
-                            # Construct GCS path: market_data/series_ticker/event_ticker/market_ticker.json
                             blob_name = f"{GCS_BASE_PATH}/{series_ticker}/{event_ticker}/{market_ticker}.json"
                             blob = bucket.blob(blob_name)
-                            # Upload data as JSON string
+
+                            # Download existing data if blob exists
+                            if blob.exists():
+                                try:
+                                    existing_data_str = blob.download_as_string()
+                                    if existing_data_str:
+                                        market_data_list = json.loads(existing_data_str)
+                                        if not isinstance(market_data_list, list):
+                                            logger.warning(f"Existing GCS blob gs://{GCS_BUCKET_NAME}/{blob_name} is not a JSON list. Overwriting.")
+                                            market_data_list = []
+                                except json.JSONDecodeError:
+                                     logger.warning(f"Could not decode JSON from existing GCS blob gs://{GCS_BUCKET_NAME}/{blob_name}. Overwriting.")
+                                     market_data_list = []
+                                except Exception as download_err:
+                                     logger.error(f"Error downloading GCS blob gs://{GCS_BUCKET_NAME}/{blob_name}: {download_err}. Overwriting.")
+                                     market_data_list = []
+
+                            market_data_list.append(market) # Append the new market data
+
+                            # Upload the updated list, overwriting the blob
                             blob.upload_from_string(
-                                data=json.dumps(market, indent=2),
+                                data=json.dumps(market_data_list, indent=2),
                                 content_type='application/json'
                             )
-                            logger.debug(f"Saved market data to GCS: gs://{GCS_BUCKET_NAME}/{blob_name}")
+                            logger.debug(f"Appended market data to GCS: gs://{GCS_BUCKET_NAME}/{blob_name}")
+
                         except Exception as gcs_e:
-                            logger.error(f"Failed to save market {market_ticker} to GCS: {gcs_e}")
+                            logger.error(f"Failed to append market {market_ticker} to GCS: {gcs_e}")
                             error_count += 1 # Increment error count for GCS save failure
-                            continue # Skip saved_count increment for this market
+                            continue # Skip saved_count increment
 
                     saved_count += 1
 
@@ -276,26 +328,75 @@ def fetch_and_save_markets(client, tickers):
     logger.info(f"Market data fetch completed. Saved: {saved_count}, Errors: {error_count}")
     return saved_count, error_count
 
-# ---- Flask HTTP Endpoint ----
+# ---- Flask HTTP Endpoints ----
+@app.route('/', methods=['GET'])
+def hello_world():
+    """Simple endpoint for testing."""
+    print("--- / endpoint START (GET) ---", flush=True) # <<< ADDED (for testing)
+    logger.info(f"Received request at root endpoint. Request path: {request.path}")
+    return "Kalshi Data Fetcher is running. Trigger /run endpoint via POST.", 200
+
 @app.route('/run', methods=['POST'])
 def run_fetcher():
     """Flask endpoint triggered by Cloud Scheduler."""
-    logger.info("Received request to run data fetcher.")
+    global secret_manager_client, storage_client # Declare intent to modify globals
+    print("--- /run endpoint START (POST) ---", flush=True) # <<< ADDED
+    port = os.environ.get("PORT")
+    logger.info(f"Received request to run data fetcher. Request path: {request.path}, PORT: {port}")
     start_time = datetime.now()
 
     try:
+        # Log environment variables for debugging
+        print(f"--- Environment variables: {os.environ} ---", flush=True) # <<< ADDED (use print for early debug)
+        logger.info(f"Environment variables: {os.environ}") # Keep logger too
+
+        # --- Deferred GCP Client Initialization ---
+        if not LOCAL_MODE:
+            print("--- Initializing GCP clients inside /run ---", flush=True)
+            try:
+                # Initialize only if not already done (though per-request is ok for debug)
+                if secret_manager_client is None:
+                    secret_manager_client = secretmanager.SecretManagerServiceClient()
+                    print("--- Initialized Secret Manager client ---", flush=True)
+                if storage_client is None:
+                    storage_client = storage.Client()
+                    print("--- Initialized Storage client ---", flush=True)
+                logger.info("Initialized Google Cloud clients inside /run.")
+            except Exception as client_init_err:
+                print(f"--- FAILED to initialize GCP clients inside /run: {client_init_err} ---", flush=True)
+                print(traceback.format_exc(), flush=True) # Print full traceback
+                logger.error("Failed to initialize Google Cloud clients inside /run.", exc_info=True)
+                return jsonify({"status": "error", "message": "GCP client initialization failed"}), 500
+        else:
+            print("--- Skipping GCP client init inside /run (LOCAL_MODE=True) ---", flush=True)
+        # --- End Deferred Initialization ---
+
+
+        # Attempt to access a secret to verify Secret Manager access (NOW uses the initialized client)
+        print("--- Attempting test secret access ---", flush=True) # <<< ADDED
+        try:
+            # Make sure access_secret_version uses the potentially newly initialized client
+            if not LOCAL_MODE and secret_manager_client is None:
+                 raise RuntimeError("Secret Manager client should have been initialized but is None.")
+            test_secret = access_secret_version("prod-keyid") # This function needs the client
+            print(f"--- Successfully accessed test secret: prod-keyid ---", flush=True) # <<< ADDED
+            logger.info(f"Successfully accessed test secret: prod-keyid")
+        except Exception as secret_err:
+            print(f"--- Failed to access test secret: {type(secret_err).__name__} ---", flush=True) # <<< ADDED
+            logger.error(f"Failed to access test secret: {type(secret_err).__name__}")
+            # Decide if this is fatal - maybe return 500?
+            # return jsonify({"status": "error", "message": f"Failed test secret access: {secret_err}"}), 500
+
+
         # Determine environment (e.g., based on an env var, default to PROD if not set)
         # Note: KALSHI_ENV should be set as an environment variable in Cloud Run
         env_str = os.getenv("KALSHI_ENV", "PROD").upper()
         kalshi_env = Environment.PROD if env_str == "PROD" else Environment.DEMO
         logger.info(f"Using Kalshi environment: {kalshi_env.value}")
 
-        # Ensure clients are initialized if not in local mode
-        if not LOCAL_MODE and (not secret_manager_client or not storage_client):
-             logger.error("Cloud clients were not initialized properly.")
-             return jsonify({"status": "error", "message": "Cloud client initialization failed"}), 500
+        # Client initialization is now handled above within the try block
 
-        client = load_client(env=kalshi_env)
+        client = load_client(env=kalshi_env) # load_client needs access_secret_version, which needs the client
         tickers_to_fetch = load_tickers() # Reads from TICKER_FILE in cwd
 
         if not tickers_to_fetch:
@@ -321,13 +422,15 @@ def run_fetcher():
         }), 200
 
     except FileNotFoundError as e:
-         logger.error(f"Critical error: Ticker file '{TICKER_FILE}' not found.", exc_info=True)
-         return jsonify({"status": "error", "message": f"Ticker file not found: {e}"}), 500
+        logger.error(f"Critical error: Ticker file '{TICKER_FILE}' not found.", exc_info=True)
+        return jsonify({"status": "error", "message": f"Ticker file not found: {e}"}), 500
     except NotImplementedError as e:
-         logger.error(f"Configuration error: {e}", exc_info=True)
-         return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Configuration error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
     except Exception as e:
-        logger.critical(f"Fetcher run failed with unhandled exception: {type(e).__name__} - {str(e)}", exc_info=True)
+        print(f"--- Unhandled exception in /run: {type(e).__name__} - {str(e)} ---", flush=True) # <<< ADDED
+        print(traceback.format_exc(), flush=True) # <<< ADDED
+        logger.exception(f"Fetcher run failed with unhandled exception: {type(e).__name__} - {str(e)}", exc_info=True)
         # Return error response
         return jsonify({"status": "error", "message": f"Unhandled exception: {str(e)}"}), 500
 
