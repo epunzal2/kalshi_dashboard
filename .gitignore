@@ -9,8 +9,10 @@ starter/
 market_data/
 .clinerules
 TODO.md
-cloud/
 tests/*png
+.dockerignore
+cloud/*
+!cloud/deploy-scheduler-template.sh
 
 # Python
 __pycache__/
