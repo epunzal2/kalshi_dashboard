@@ -1,0 +1,50 @@
+graph TD
+    %% External Systems
+    KalshiAPI["Kalshi API"]
+    
+    %% Cloud Scheduler Components
+    subgraph "Cloud Scheduler"
+        Scheduler["Cloud Scheduler Job<br/>kalshi-data-fetcher-job<br/>/run every 2 hours"]
+    end
+    
+    %% Cloud Run Components
+    subgraph "Cloud Run"
+        CloudRun["Cloud Run Service<br/>kalshi-data-fetcher"]
+        DataFetcher["Data Fetcher<br/>src/data_fetcher.py"]
+        KalshiClient["Kalshi Client<br/>src/clients.py"]
+    end
+    
+    %% Storage Components
+    subgraph "Google Cloud Storage"
+        GCS["GCS Bucket<br/>kalshi-market-data-storage"]
+        MarketData["market_data/*.json"]
+    end
+    
+    %% Secret Manager
+    subgraph "Secret Manager"
+        APIKeyID["Secret<br/>prod-keyid"]
+        PrivateKey["Secret<br/>prod-keyfile"]
+    end
+    
+    %% Input File
+    TickersFile["tickers.txt"]
+    
+    %% Service Account
+    ServiceAccount["Service Account<br/>kalshi-data-fetcher-sa"]
+    
+    %% Define flow
+    Scheduler -->|"Triggers via HTTP POST<br/>with OIDC auth"| CloudRun
+    CloudRun -->|"Hosts"| DataFetcher
+    DataFetcher -->|"Reads"| TickersFile
+    DataFetcher -->|"Uses"| KalshiClient
+    KalshiClient -->|"Authenticates and<br/>retrieves data"| KalshiAPI
+    
+    DataFetcher -->|"Accesses secrets via"| ServiceAccount
+    ServiceAccount -->|"Has access to"| APIKeyID
+    ServiceAccount -->|"Has access to"| PrivateKey
+    
+    DataFetcher -->|"Writes JSON files"| GCS
+    GCS -->|"Contains"| MarketData
+    
+    %% Authentication flow
+    ServiceAccount -.->|"Has roles/run.invoker<br/>permission on"| CloudRun
