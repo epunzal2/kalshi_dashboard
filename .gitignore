@@ -13,6 +13,7 @@ tests/*png
 .dockerignore
 cloud/*
 !cloud/deploy-scheduler-template.sh
+!cloud/architecture*
 
 # Python
 __pycache__/
