@@ -1,0 +1,29 @@
+2025-03-31 00:14 - Cline - Added
+Added and tested `calculate_bid_ask_spread` function in test suite. All tests were successful in both DEMO and PROD environments.
+Related components: tests/test_kalshi_client_final.py
+
+2025-03-30 20:53 - Cline - Modified
+Finalized and tested `src/clients.py::KalshiHttpClient`:
+- Created test script `tests/test_kalshi_client_final.py` to exercise key V2 API endpoints.
+- Tested endpoints using DEMO environment: `get_exchange_status`, `get_event`, `get_events` (by series), `get_market`, `get_market_orderbook`, `get_market_candlesticks`, `get_trades`. Test Date/Time: 2025-03-31T00:53:20Z.
+- Confirmed successful real-time data capture (order book, trades, candlesticks).
+- Generated detailed test logs and stored them in `tests/2025-03-29_23:49__HK47/test_run.log` for reference.
+- Verified compatibility of `src/data_fetcher.py` with the updated client in `LOCAL_MODE`.
+Related components: `tests/test_kalshi_client_final.py` (new), `src/data_fetcher.py` (verified compatibility).
+
+2025-03-30 20:01 - Cline - Modified
+Updated src/clients.py:
+- Added helper methods _make_request, post, delete for handling HTTP requests.
+- Implemented new Kalshi API v2 methods in KalshiHttpClient:
+    - Events: get_events
+    - Markets: get_market_candlesticks
+    - Exchange: get_exchange_status, get_exchange_schedule, get_exchange_announcements
+    - Milestones: get_milestones, get_milestone
+    - Portfolio: get_fills, get_orders, get_order, create_order, batch_create_orders, cancel_order, batch_cancel_orders, amend_order, decrease_order, get_positions, get_portfolio_settlements
+    - Structured Targets: get_structured_target
+- Corrected URL path in get_market_orderbook.
+- Added/updated docstrings for KalshiBaseClient, KalshiHttpClient, and all implemented/modified methods according to project standards.
+- Added comments indicating unimplemented method categories.
+- Refactored request header generation to include body signing.
+- Fixed parameter order in amend_order method signature.
+Related components: None directly, but code using KalshiHttpClient may now use new methods.

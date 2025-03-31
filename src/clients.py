@@ -1,13 +1,7 @@
 import requests
 import base64
 import time
-from typing import Any, Dict, Optional
-from datetime import datetime, timedelta
-from enum import Enum
-import requests
-import base64
-import time
-from typing import Any, Dict, Optional, List, Callable, Coroutine
+from typing import Any, Dict, Optional, List, Union, Callable, Coroutine
 from datetime import datetime, timedelta
 from enum import Enum
 import json
@@ -36,44 +30,82 @@ class Environment(Enum):
     PROD = "prod"
 
 class KalshiBaseClient:
+    """
+    Base client for Kalshi API interactions, handling authentication and environment setup.
+
+    Attributes:
+        key_id (str): Kalshi API Key ID.
+        private_key (rsa.RSAPrivateKey): RSA private key for signing requests.
+        environment (Environment): The Kalshi environment (DEMO or PROD).
+        last_api_call (datetime): Timestamp of the last HTTP API call for rate limiting.
+        HTTP_BASE_URL (str): Base URL for HTTP API requests.
+        WS_BASE_URL (str): Base URL for WebSocket connections.
+        logger (logging.Logger): Logger instance for the client.
+    """
     def __init__(
         self,
         key_id: str,
         private_key: rsa.RSAPrivateKey,
         environment: Environment = Environment.DEMO,
     ):
+        """
+        Initializes the KalshiBaseClient.
+
+        Args:
+            key_id: Kalshi API Key ID.
+            private_key: RSA private key object.
+            environment: Target environment (DEMO or PROD). Defaults to DEMO.
+
+        Raises:
+            ValueError: If an invalid environment is provided.
+        """
         self.key_id = key_id
         self.private_key = private_key
         self.environment = environment
         self.last_api_call = datetime.now()
+        self.logger = logging.getLogger(__name__) # Initialize logger here
 
         if self.environment == Environment.DEMO:
             self.HTTP_BASE_URL = os.environ.get("DEMO_HTTP_BASE_URL", "https://demo-api.kalshi.co")
             self.WS_BASE_URL = os.environ.get("DEMO_WS_BASE_URL", "wss://demo-api.kalshi.co")
         elif self.environment == Environment.PROD:
+            # Updated PROD URL based on user input
             self.HTTP_BASE_URL = os.environ.get("PROD_HTTP_BASE_URL", "https://api.elections.kalshi.com")
             self.WS_BASE_URL = os.environ.get("PROD_WS_BASE_URL", "wss://api.elections.kalshi.com")
         else:
             raise ValueError("Invalid environment")
 
-    def request_headers(self, method: str, path: str) -> Dict[str, Any]:
+    def request_headers(self, method: str, path: str, body: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Generates the required headers for authenticating Kalshi API requests.
+
+        Args:
+            method (str): The HTTP method (e.g., "GET", "POST", "DELETE").
+            path (str): The request path (including query parameters if any).
+            body (Optional[str]): The request body as a JSON string, required for POST/DELETE requests with body.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing the necessary request headers.
+        """
         current_time_milliseconds = int(time.time() * 1000)
         timestamp_str = str(current_time_milliseconds)
-        
-        import logging
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.DEBUG)
+
         self.logger.debug("=== Debug: Signature Components ===")
         self.logger.debug(f"Timestamp: {timestamp_str}")
         self.logger.debug(f"Method: {method}")
         self.logger.debug(f"Path: {path}")
+        if body:
+             self.logger.debug(f"Body (first 100 chars): {body[:100]}...")
 
         path_parts = path.split('?')
         msg_string = timestamp_str + method + path_parts[0]
-        print(f"Message String: {msg_string}")
-        
+        if body:
+            msg_string += body # Append body for POST/DELETE with body
+
+        self.logger.debug(f"Message String for Signing: {msg_string}")
+
         signature = self.sign_pss_text(msg_string)
-        print(f"Signature: {signature[:50]}...")  # Print first 50 chars of signature
+        self.logger.debug(f"Signature (first 50 chars): {signature[:50]}...")
 
         headers = {
             "Content-Type": "application/json",
@@ -81,14 +113,23 @@ class KalshiBaseClient:
             "KALSHI-ACCESS-SIGNATURE": signature,
             "KALSHI-ACCESS-TIMESTAMP": timestamp_str,
         }
-        
-        print("\n=== Request Headers ===")
+
+        self.logger.debug("\n=== Request Headers ===")
         for k, v in headers.items():
-            print(f"{k}: {v[:100]}{'...' if len(v) > 100 else ''}")  # Truncate long values
-        
+            self.logger.debug(f"{k}: {v[:100]}{'...' if len(v) > 100 else ''}")
+
         return headers
 
     def sign_pss_text(self, text: str) -> str:
+        """
+        Signs the provided text using the RSA private key with PSS padding.
+
+        Args:
+            text (str): The string to sign.
+
+        Returns:
+            str: The base64 encoded signature.
+        """
         message = text.encode('utf-8')
         signature = self.private_key.sign(
             message,
@@ -98,86 +139,300 @@ class KalshiBaseClient:
         return base64.b64encode(signature).decode('utf-8')
 
 class KalshiHttpClient(KalshiBaseClient):
+    """
+    Client for interacting with the Kalshi HTTP REST API (v2).
+
+    Provides methods for fetching market data, managing portfolio (orders, positions, balance),
+    and accessing exchange information.
+
+    Attributes:
+        host (str): The base host URL for API requests.
+        base_url (str): Alias for host.
+        markets_url (str): Base path for market-related endpoints.
+        portfolio_url (str): Base path for portfolio-related endpoints.
+        series_url (str): Base path for series-related endpoints.
+        events_url (str): Base path for event-related endpoints.
+        exchange_url (str): Base path for exchange-related endpoints.
+        milestones_url (str): Base path for milestone-related endpoints.
+        structured_targets_url (str): Base path for structured target endpoints.
+    """
     def __init__(
         self,
         key_id: str,
         private_key: rsa.RSAPrivateKey,
         environment: Environment = Environment.DEMO,
     ):
+        """
+        Initializes the KalshiHttpClient.
+
+        Args:
+            key_id: Kalshi API Key ID.
+            private_key: RSA private key object.
+            environment: Target environment (DEMO or PROD). Defaults to DEMO.
+        """
         super().__init__(key_id, private_key, environment)
         self.host = self.HTTP_BASE_URL
         self.base_url = self.HTTP_BASE_URL
+        # Define base paths for different API sections
         self.markets_url = "/trade-api/v2/markets"
         self.portfolio_url = "/trade-api/v2/portfolio"
         self.series_url = "/trade-api/v2/series"
         self.events_url = "/trade-api/v2/events"
+        self.exchange_url = "/trade-api/v2/exchange"
+        self.milestones_url = "/trade-api/v2/milestones"
+        self.structured_targets_url = "/trade-api/v2/structured_targets"
+
+        # Note: Communications and Collection methods are not implemented yet.
 
     def rate_limit(self) -> None:
-        THRESHOLD_IN_MILLISECONDS = 100
+        """
+        Ensures requests do not exceed the API rate limit by introducing a small delay if necessary.
+        """
+        THRESHOLD_IN_MILLISECONDS = 100 # Adjust as needed based on Kalshi limits
         now = datetime.now()
-        threshold_in_seconds = THRESHOLD_IN_MILLISECONDS / 1000
-        if (now - self.last_api_call).total_seconds() * 1000 < THRESHOLD_IN_MILLISECONDS:
-            time.sleep(threshold_in_seconds)
+        threshold_in_seconds = THRESHOLD_IN_MILLISECONDS / 1000.0
+        time_since_last_call = (now - self.last_api_call).total_seconds()
+
+        if time_since_last_call < threshold_in_seconds:
+            sleep_duration = threshold_in_seconds - time_since_last_call
+            self.logger.debug(f"Rate limiting: sleeping for {sleep_duration:.3f} seconds.")
+            time.sleep(sleep_duration)
         self.last_api_call = datetime.now()
 
     def raise_if_bad_response(self, response: requests.Response) -> None:
-        if not 200 <= response.status_code < 300:
-            response.raise_for_status()
+        """
+        Checks the HTTP response status code and raises an HTTPError for non-2xx responses.
 
-    def get(self, path: str, params: Dict[str, Any] = {}, verbose=False) -> Any:
+        Args:
+            response (requests.Response): The response object from the requests library.
+
+        Raises:
+            HTTPError: If the response status code is not in the 200-299 range.
+        """
+        if not 200 <= response.status_code < 300:
+            self.logger.error(f"API Error: Status={response.status_code}, Response={response.text[:500]}")
+            response.raise_for_status() # Raises HTTPError with details
+
+    def _make_request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, verbose: bool = False) -> Any:
+        """
+        Internal helper method to make HTTP requests (GET, POST, DELETE).
+
+        Handles rate limiting, header generation, request execution, error checking, and JSON parsing.
+
+        Args:
+            method (str): HTTP method ("GET", "POST", "DELETE").
+            path (str): API endpoint path (e.g., "/trade-api/v2/markets").
+            params (Optional[Dict[str, Any]]): URL query parameters. Defaults to None.
+            data (Optional[Dict[str, Any]]): Request body data (for POST/DELETE). Defaults to None.
+            verbose (bool): If True, logs the raw response text. Defaults to False.
+
+        Returns:
+            Any: The parsed JSON response.
+
+        Raises:
+            HTTPError: If the API returns a non-2xx status code.
+            ValueError: If the response body is not valid JSON.
+            requests.exceptions.RequestException: For network or request-related errors.
+        """
         self.rate_limit()
-        print(f"\n=== Sending GET Request ===")
-        print(f"Full URL: {self.host}{path}")
-        response = requests.get(
-            self.host + path,
-            headers=self.request_headers("GET", path),
-            params=params
-        )
-        self.raise_if_bad_response(response)
+
+        full_url = self.host + path
+        body_json = None
+        if data is not None:
+            # Ensure data is dict before dumping, handle potential non-dict data if necessary
+            if isinstance(data, dict):
+                body_json = json.dumps(data) # Serialize body for signing and sending
+            else:
+                # Log warning or raise error if data is not a dict for POST/DELETE
+                self.logger.warning(f"Request data for {method} {path} is not a dictionary: {type(data)}. Sending as is.")
+                body_json = str(data) # Fallback? Or raise error? Let's try sending as string.
+
+        # Construct the path string including query params for header generation
+        query_string = ""
+        if params:
+            # Ensure params is a dictionary before iterating
+            if isinstance(params, dict):
+                 query_string = "?" + "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
+            else:
+                 self.logger.warning(f"Query parameters for {method} {path} is not a dictionary: {type(params)}. Ignoring params.")
+                 params = None # Clear params if not a dict
+
+        path_for_headers = path + query_string
+
+        headers = self.request_headers(method, path_for_headers, body=body_json)
+
+        self.logger.info(f"Sending {method} Request to {full_url}")
+        if params: self.logger.debug(f"Query Params: {params}")
+        if body_json: self.logger.debug(f"Request Body: {body_json}")
+
+        try:
+            response = requests.request(
+                method=method,
+                url=full_url,
+                headers=headers,
+                params=params, # requests library handles URL encoding for params
+                data=body_json # Send serialized JSON string as data
+            )
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Network or request error during {method} to {full_url}: {e}", exc_info=True)
+            raise # Re-raise the original exception
+
+        self.raise_if_bad_response(response) # Check for 4xx/5xx errors
+
         if verbose:
-            print(f"\n=== Raw Response ===")
-            print(response.text)  # Add raw response logging
+            self.logger.debug(f"Raw Response ({response.status_code}): {response.text}")
+
+        # Handle potential empty responses (e.g., 204 No Content for DELETE)
+        if response.status_code == 204 or not response.content:
+             self.logger.debug(f"Received empty response body (Status: {response.status_code}).")
+             # Return None for empty body cases.
+             return None
+
         try:
             return response.json()
         except json.JSONDecodeError as e:
-            print(f"JSON Decode Failed. Status: {response.status_code}")
-            raise ValueError(f"Invalid JSON response: {response.text[:200]}") from e
+            self.logger.error(f"Failed to decode JSON response. Status: {response.status_code}, Response: {response.text[:200]}...")
+            raise ValueError(f"Invalid JSON response received from API: {response.text[:200]}") from e
 
-    def _get(self, path: str) -> dict:
-        """Unified GET request handler with error handling"""
-        try:
-            response = self.get(path)
-            return response
-        except HTTPError as e:
-            print(f"API error: {e}")
-            return None
-        
-    # public methods
-    def get_api_version(self) -> str:
+    def get(self, path: str, params: Optional[Dict[str, Any]] = None, verbose: bool = False) -> Any:
+        """
+        Performs a GET request to the specified API path.
+
+        Args:
+            path (str): API endpoint path.
+            params (Optional[Dict[str, Any]]): URL query parameters. Defaults to None.
+            verbose (bool): If True, logs the raw response text. Defaults to False.
+
+        Returns:
+            Any: The parsed JSON response.
+        """
+        # Filter out None values from params before passing
+        filtered_params = {k: v for k, v in params.items() if v is not None} if params else None
+        return self._make_request("GET", path, params=filtered_params, verbose=verbose)
+
+    def post(self, path: str, data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None, verbose: bool = False) -> Any:
+        """
+        Performs a POST request to the specified API path.
+
+        Args:
+            path (str): API endpoint path.
+            data (Optional[Dict[str, Any]]): Request body data. Defaults to None.
+            params (Optional[Dict[str, Any]]): URL query parameters. Defaults to None.
+            verbose (bool): If True, logs the raw response text. Defaults to False.
+
+        Returns:
+            Any: The parsed JSON response.
+        """
+        filtered_params = {k: v for k, v in params.items() if v is not None} if params else None
+        return self._make_request("POST", path, params=filtered_params, data=data, verbose=verbose)
+
+    def delete(self, path: str, data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None, verbose: bool = False) -> Any:
+        """
+        Performs a DELETE request to the specified API path.
+
+        Args:
+            path (str): API endpoint path.
+            data (Optional[Dict[str, Any]]): Request body data (used by BatchCancelOrders). Defaults to None.
+            params (Optional[Dict[str, Any]]): URL query parameters. Defaults to None.
+            verbose (bool): If True, logs the raw response text. Defaults to False.
+
+        Returns:
+            Any: The parsed JSON response (often None or the cancelled object for Kalshi DELETE).
+        """
+        filtered_params = {k: v for k, v in params.items() if v is not None} if params else None
+        return self._make_request("DELETE", path, params=filtered_params, data=data, verbose=verbose)
+
+    # --- Public API Methods ---
+
+    def get_api_version(self) -> Dict[str, Any]:
         """
         Fetches the API version from the Kalshi API.
 
         Returns:
-            str: The API version as a string.
+            Dict[str, Any]: A dictionary containing the API version information.
+                            Example: {'version': 'v2.X.Y'}
         """
-        return self._get(f"{self.host}/trade-api/v2/api_version")
-    
-    # market methods
-    def get_trades(
-        self,
-        ticker: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        params = {k: v for k, v in {"ticker": ticker, "limit": limit}.items() if v is not None}
-        return self.get(f"{self.markets_url}/trades", params=params)
+        # Assuming the endpoint is /trade-api/v2/api_version based on original code
+        # Adjust path if needed.
+        path = "/trade-api/v2/api_version"
+        return self.get(path)
 
-    def get_market(self, ticker: str) -> Dict[str, Any]:
-        params = {'tickers': ticker}
+    # --- Event Methods ---
+    def get_events(
+        self,
+        limit: Optional[int] = 100,
+        cursor: Optional[str] = None,
+        status: Optional[str] = None,
+        series_ticker: Optional[str] = None,
+        with_nested_markets: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches data about events, with optional filtering and pagination.
+
+        Args:
+            limit (Optional[int]): Number of results per page (1-200). Defaults to 100.
+            cursor (Optional[str]): Pagination cursor from a previous request.
+            status (Optional[str]): Comma-separated list of statuses (unopened, open, closed, settled).
+            series_ticker (Optional[str]): Filter events by series ticker.
+            with_nested_markets (Optional[bool]): Include market data nested within each event.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of events and pagination cursor.
+                            Example: {'events': [...], 'cursor': '...'}
+        """
+        params = {
+            "limit": limit,
+            "cursor": cursor,
+            "status": status,
+            "series_ticker": series_ticker,
+            "with_nested_markets": with_nested_markets
+        }
+        return self.get(self.events_url, params=params)
+
+    def get_event(self, event_ticker: str, with_nested_markets: bool = False) -> Dict[str, Any]:
+        """
+        Fetches details for a specific event, optionally including its markets.
+
+        Args:
+            event_ticker (str): The unique ticker for the event (e.g., 'KXCPIYOY-25MAR').
+            with_nested_markets (bool): If True, includes market data nested within the event. Defaults to False.
+
+        Returns:
+            Dict[str, Any]: The API response containing the event details.
+                            Example: {'event': {...}}
+        """
+        # Path parameter based on typical REST patterns for fetching a single resource.
+        path = f"{self.events_url}/{event_ticker}"
+        params = {'with_nested_markets': with_nested_markets}
+        return self.get(path, params=params)
+
+    # --- Market Methods ---
+    def get_market(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetches details for a specific market by its ticker.
+
+        Args:
+            ticker (str): The unique ticker for the market (e.g., 'KXCPIYOY-25MAR-T2.5').
+
+        Returns:
+            Optional[Dict[str, Any]]: A dictionary containing market details, or None if not found.
+                                      Example: {'market': {...}} or None
+
+        Raises:
+            HTTPError: If the API returns an error status code (other than 404).
+            ValueError: If the response is not valid JSON or the structure is unexpected.
+        """
+        path = f"{self.markets_url}/{ticker}"
         try:
-            markets = self.get(self.markets_url, params=params).get('markets', [])
-            return markets[0] if markets else None
+            response = self.get(path)
+            # Assuming response structure is {'market': {...}}
+            return response.get('market') if isinstance(response, dict) else None
         except HTTPError as e:
-            raise ValueError(f"API error: {e}") from e
+            if e.response.status_code == 404:
+                self.logger.warning(f"Market with ticker '{ticker}' not found (404).")
+                return None
+            self.logger.error(f"API error fetching market '{ticker}': {e}", exc_info=True)
+            raise
 
     def get_markets(
         self,
@@ -186,22 +441,26 @@ class KalshiHttpClient(KalshiBaseClient):
         max_close_ts: Optional[int] = None,
         min_close_ts: Optional[int] = None,
         status: Optional[str] = None,
-        tickers: Optional[str] = None,
-        limit: int = 100
-    ) -> list[dict]:
-        """Fetches markets with pagination and filtering.
-        
+        tickers: Optional[List[str]] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches a list of markets with optional filtering and pagination.
+
         Args:
-            event_ticker: Filter by event ticker
-            series_ticker: Filter by series ticker
-            max_close_ts: Maximum close timestamp (inclusive)
-            min_close_ts: Minimum close timestamp (inclusive)
-            status: Comma-separated statuses (unopened, open, closed, settled)
-            tickers: Comma-separated market tickers
-            limit: Number of results per page (1-1000, default self.rate_limit())
-            
+            event_ticker (Optional[str]): Filter by event ticker.
+            series_ticker (Optional[str]): Filter by series ticker.
+            max_close_ts (Optional[int]): Maximum close timestamp (Unix timestamp, inclusive).
+            min_close_ts (Optional[int]): Minimum close timestamp (Unix timestamp, inclusive).
+            status (Optional[str]): Comma-separated statuses (unopened, open, closed, settled).
+            tickers (Optional[List[str]]): Filter by a list of specific market tickers.
+            limit (int): Number of results per page (1-1000). Defaults to 100.
+            cursor (Optional[str]): Pagination cursor from a previous request.
+
         Returns:
-            List of market dictionaries
+            Dict[str, Any]: The API response containing the list of markets and pagination cursor.
+                            Example: {'markets': [...], 'cursor': '...'}
         """
         params = {
             'event_ticker': event_ticker,
@@ -209,64 +468,686 @@ class KalshiHttpClient(KalshiBaseClient):
             'max_close_ts': max_close_ts,
             'min_close_ts': min_close_ts,
             'status': status,
-            'tickers': tickers,
-            'limit': min(max(limit, 1), 1000)  # Enforce API limits
+            'tickers': ",".join(tickers) if tickers else None,
+            'limit': min(max(limit, 1), 1000),
+            'cursor': cursor
         }
-        params = {k: v for k, v in params.items() if v is not None}
-        
-        all_markets = []
-        cursor = ''
-        
-        while True:
-            if cursor:
-                params['cursor'] = cursor
-                
-            response = self.get(self.markets_url, params=params)
-            all_markets.extend(response.get('markets', []))
-            cursor = response.get('cursor', '')
-            
-            if not cursor:
-                break
+        return self.get(self.markets_url, params=params)
 
-        return all_markets
+    def get_market_orderbook(self, ticker: str, depth: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Fetches the order book for a specific market.
+
+        Args:
+            ticker (str): The unique ticker for the market.
+            depth (Optional[int]): Maximum number of price levels per side. Defaults to full depth.
+
+        Returns:
+            Dict[str, Any]: The API response containing the order book data.
+                            Example: {'orderbook': {'yes': [[price, size], ...], 'no': [[price, size], ...]}}
+        """
+        path = f"{self.markets_url}/{ticker}/orderbook"
+        params = {'depth': depth}
+        # Assuming response structure is {'orderbook': {...}}
+        return self.get(path, params=params)
+
+    def get_market_candlesticks(
+        self,
+        series_ticker: str,
+        ticker: str,
+        start_ts: int,
+        end_ts: int,
+        period_interval: int
+    ) -> Dict[str, Any]:
+        """
+        Fetches historical candlestick data for a market.
+
+        Args:
+            series_ticker (str): The series ticker the market belongs to.
+            ticker (str): The market ticker.
+            start_ts (int): Start timestamp (Unix timestamp, inclusive). Candlesticks ending on or after this time.
+            end_ts (int): End timestamp (Unix timestamp, inclusive). Candlesticks ending on or before this time.
+                          Must be within 5000 * period_interval minutes after start_ts.
+            period_interval (int): Candlestick period in minutes (e.g., 1, 60, 1440).
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of candlesticks.
+                            Example: {'candlesticks': [{'ts': ..., 'open': ..., 'high': ..., 'low': ..., 'close': ..., 'volume': ...}, ...]}
+        """
+        path = f"{self.series_url}/{series_ticker}/markets/{ticker}/candlesticks"
+        params = {
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "period_interval": period_interval
+        }
+        return self.get(path, params=params)
+
+    def get_trades(
+        self,
+        ticker: Optional[str] = None,
+        limit: Optional[int] = 100, # Default based on original code
+        cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches recent trades, optionally filtered by market.
+
+        Args:
+            ticker (Optional[str]): Filter trades by market ticker.
+            limit (Optional[int]): Maximum number of trades to return. Defaults to 100.
+            cursor (Optional[str]): Pagination cursor for fetching older trades.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of trades and pagination cursor.
+                            Example: {'trades': [...], 'cursor': '...'}
+        """
+        path = f"{self.markets_url}/trades"
+        params = {
+            "ticker": ticker,
+            "limit": limit,
+            "cursor": cursor
+        }
+        return self.get(path, params=params)
 
     def get_market_history(self, ticker: str, limit: int = 100) -> Dict[str, Any]:
+        """
+        Alias for get_trades, fetching recent trade history for a market.
+
+        Args:
+            ticker (str): The market ticker.
+            limit (int): Maximum number of trades to return. Defaults to 100.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of trades.
+        """
         return self.get_trades(ticker=ticker, limit=limit)
 
-    def get_series(self, series_ticker: str) -> dict:
-        """Get series details matching starter's ExchangeClient.get_series()"""
-        series_data = self._get(f"{self.series_url}/{series_ticker}")
-        if series_data:
-            return series_data
-        else:
-            return {'series': None}
+    # --- Series Methods ---
+    def get_series(self, series_ticker: str) -> Dict[str, Any]:
+        """
+        Fetches details for a specific series by its ticker.
 
-    def get_event(self, event_ticker: str, with_nested_markets: bool = False) -> dict:
-        """Get event details with market list like starter's get_event()"""
-        params = {'event_ticker': event_ticker,
-                  'with_nested_markets': with_nested_markets
-        }
-        # Call self.get directly as it handles params
-        event_data = self.get(f"{self.events_url}/{event_ticker}", params=params)
-        return event_data
+        Args:
+            series_ticker (str): The unique ticker for the series (e.g., 'KXCPIYOY').
 
-    def get_series_markets(self, series_ticker: str) -> dict:
-        """Get all markets associated with a series"""
-        return self._get(f"{self.series_url}/{series_ticker}/markets")
+        Returns:
+            Dict[str, Any]: The API response containing the series details.
+                            Example: {'series': {...}}
+        """
+        path = f"{self.series_url}/{series_ticker}"
+        # Assuming response structure is {'series': {...}}
+        return self.get(path)
 
-    def get_market_orderbook(self, ticker: str, depth: int) -> dict:
+    def get_series_markets(self, series_ticker: str) -> Dict[str, Any]:
+        """
+        Fetches all markets associated with a specific series.
+
+        Args:
+            series_ticker (str): The unique ticker for the series.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of markets for the series.
+                            Example: {'markets': [...]}
+        """
+        path = f"{self.series_url}/{series_ticker}/markets"
+        return self.get(path)
+
+    # --- Exchange Methods ---
+    def get_exchange_status(self) -> Dict[str, Any]:
+        """
+        Fetches the current status of the Kalshi exchange.
+
+        Returns:
+            Dict[str, Any]: The API response containing exchange status details.
+                            Example: {'exchange_status': {'trading_active': bool, ...}}
+        """
+        path = f"{self.exchange_url}/status"
+        return self.get(path)
+
+    def get_exchange_schedule(self) -> Dict[str, Any]:
+        """
+        Fetches the trading schedule for the Kalshi exchange.
+
+        Returns:
+            Dict[str, Any]: The API response containing the exchange schedule.
+                            Example: {'schedule': {'open_time': ..., 'close_time': ..., 'holidays': [...]}}
+        """
+        path = f"{self.exchange_url}/schedule"
+        return self.get(path)
+
+    def get_exchange_announcements(self, limit: Optional[int] = None, cursor: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Fetches exchange-wide announcements, with optional pagination.
+
+        Args:
+            limit (Optional[int]): Number of announcements per page.
+            cursor (Optional[str]): Pagination cursor.
+
+        Returns:
+            Dict[str, Any]: The API response containing a list of announcements and cursor.
+                            Example: {'announcements': [...], 'cursor': '...'}
+        """
+        path = f"{self.exchange_url}/announcements"
+        params = {"limit": limit, "cursor": cursor}
+        return self.get(path, params=params)
+
+    # --- Milestone Methods ---
+    def get_milestones(
+        self,
+        minimum_start_date: Optional[str] = None,
+        category: Optional[str] = None,
+        type: Optional[str] = None,
+        related_event_ticker: Optional[str] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches data about milestones with optional filtering and pagination.
+
+        Args:
+            minimum_start_date (Optional[str]): Filter milestones starting on or after this date (ISO 8601 format, e.g., "YYYY-MM-DDTHH:MM:SSZ").
+            category (Optional[str]): Filter by category.
+            type (Optional[str]): Filter by type.
+            related_event_ticker (Optional[str]): Filter by related event ticker.
+            limit (int): Number of items per page (1-500). Defaults to 100.
+            cursor (Optional[str]): Pagination cursor from a previous request.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of milestones and pagination cursor.
+                            Example: {'milestones': [...], 'cursor': '...'}
+        """
         params = {
-            'ticker': ticker,
-            'depth': depth
+            "minimum_start_date": minimum_start_date,
+            "category": category,
+            "type": type,
+            "related_event_ticker": related_event_ticker,
+            "limit": min(max(limit, 1), 500),
+            "cursor": cursor
         }
-        return self._get(f"{self.markets_url}/orderbook", params=params)
+        return self.get(self.milestones_url, params=params)
 
-    # portfolio methods
+    def get_milestone(self, milestone_id: str) -> Dict[str, Any]:
+        """
+        Fetches data about a specific milestone by its ID.
+
+        Args:
+            milestone_id (str): The unique ID of the milestone.
+
+        Returns:
+            Dict[str, Any]: The API response containing the milestone details.
+                            Example: {'milestone': {...}}
+        """
+        path = f"{self.milestones_url}/{milestone_id}"
+        # Assuming response structure is {'milestone': {...}}
+        return self.get(path)
+
+    # --- Portfolio Methods ---
     def get_balance(self) -> Dict[str, Any]:
-        balance = self.get(f"{self.portfolio_url}/balance")
-        logger.debug(f"Raw balance response: {balance}") # Use logger
+        """
+        Fetches the current account balance.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing balance details.
+                            Example: {'balance': {'user_id': ..., 'available_balance': ..., 'total_balance': ...}}
+        """
+        path = f"{self.portfolio_url}/balance"
+        balance = self.get(path)
+        self.logger.debug(f"Raw balance response: {balance}")
+        # Assuming response structure is {'balance': {...}}
         return balance
 
+    def get_fills(
+        self,
+        ticker: Optional[str] = None,
+        order_id: Optional[str] = None,
+        min_ts: Optional[int] = None,
+        max_ts: Optional[int] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches the user's trade fills with optional filtering and pagination.
+
+        Args:
+            ticker (Optional[str]): Filter fills by market ticker.
+            order_id (Optional[str]): Filter fills related to a specific order ID.
+            min_ts (Optional[int]): Filter fills executed at or after this Unix timestamp.
+            max_ts (Optional[int]): Filter fills executed at or before this Unix timestamp.
+            limit (int): Number of results per page (1-1000). Defaults to 100.
+            cursor (Optional[str]): Pagination cursor from a previous request.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of fills and pagination cursor.
+                            Example: {'fills': [...], 'cursor': '...'}
+        """
+        path = f"{self.portfolio_url}/fills"
+        params = {
+            "ticker": ticker,
+            "order_id": order_id,
+            "min_ts": min_ts,
+            "max_ts": max_ts,
+            "limit": min(max(limit, 1), 1000),
+            "cursor": cursor
+        }
+        return self.get(path, params=params)
+
+    def get_orders(
+        self,
+        ticker: Optional[str] = None,
+        event_ticker: Optional[str] = None,
+        min_ts: Optional[int] = None,
+        max_ts: Optional[int] = None,
+        status: Optional[str] = None, # resting, canceled, executed
+        limit: int = 100,
+        cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches the user's orders with optional filtering and pagination.
+
+        Args:
+            ticker (Optional[str]): Filter orders by market ticker.
+            event_ticker (Optional[str]): Filter orders by event ticker.
+            min_ts (Optional[int]): Filter orders created at or after this Unix timestamp.
+            max_ts (Optional[int]): Filter orders created at or before this Unix timestamp.
+            status (Optional[str]): Filter orders by status (resting, canceled, executed).
+            limit (int): Number of results per page (1-1000). Defaults to 100.
+            cursor (Optional[str]): Pagination cursor from a previous request.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of orders and pagination cursor.
+                            Example: {'orders': [...], 'cursor': '...'}
+        """
+        path = f"{self.portfolio_url}/orders"
+        params = {
+            "ticker": ticker,
+            "event_ticker": event_ticker,
+            "min_ts": min_ts,
+            "max_ts": max_ts,
+            "status": status,
+            "limit": min(max(limit, 1), 1000),
+            "cursor": cursor
+        }
+        return self.get(path, params=params)
+
+    def get_order(self, order_id: str) -> Dict[str, Any]:
+        """
+        Fetches details for a specific order by its ID.
+
+        Args:
+            order_id (str): The unique ID of the order.
+
+        Returns:
+            Dict[str, Any]: The API response containing the order details.
+                            Example: {'order': {...}}
+        """
+        path = f"{self.portfolio_url}/orders/{order_id}"
+        # Assuming response structure is {'order': {...}}
+        return self.get(path)
+
+    def create_order(
+        self,
+        ticker: str,
+        action: str, # buy, sell
+        side: str,   # yes, no
+        count: int,
+        type: str,   # limit, market
+        client_order_id: str,
+        yes_price: Optional[int] = None,
+        no_price: Optional[int] = None,
+        buy_max_cost: Optional[int] = None,
+        sell_position_floor: Optional[int] = None,
+        expiration_ts: Optional[int] = None,
+        post_only: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """
+        Submits a new order to the exchange.
+
+        Args:
+            ticker (str): Market ticker.
+            action (str): 'buy' or 'sell'.
+            side (str): 'yes' or 'no'.
+            count (int): Number of contracts.
+            type (str): 'limit' or 'market'.
+            client_order_id (str): A unique client-generated ID for the order.
+            yes_price (Optional[int]): Limit price in cents for the 'yes' side. Required for limit orders.
+            no_price (Optional[int]): Limit price in cents for the 'no' side. Required for limit orders.
+                                      Exactly one of yes_price or no_price must be provided for limit orders.
+            buy_max_cost (Optional[int]): Max cost in cents for market buy orders.
+            sell_position_floor (Optional[int]): Floor for market sell orders (e.g., 0 to prevent flipping position).
+            expiration_ts (Optional[int]): Order expiration time (Unix timestamp). None for GTC, past for IOC.
+            post_only (Optional[bool]): If True, reject order if it would execute immediately.
+
+        Returns:
+            Dict[str, Any]: The API response containing the newly created order details.
+                            Example: {'order': {...}}
+
+        Raises:
+            ValueError: If price conditions for limit orders are not met.
+        """
+        path = f"{self.portfolio_url}/orders"
+        if type == 'limit' and not (yes_price is not None) ^ (no_price is not None):
+             raise ValueError("For limit orders, exactly one of 'yes_price' or 'no_price' must be provided.")
+
+        data = {
+            "ticker": ticker,
+            "action": action,
+            "side": side,
+            "count": count,
+            "type": type,
+            "client_order_id": client_order_id,
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "buy_max_cost": buy_max_cost,
+            "sell_position_floor": sell_position_floor,
+            "expiration_ts": expiration_ts,
+            "post_only": post_only
+        }
+        # Filter out None values from the data payload
+        payload = {k: v for k, v in data.items() if v is not None}
+        return self.post(path, data=payload)
+
+    def batch_create_orders(self, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Submits a batch of orders (up to 20). Advanced access required.
+
+        Each order dictionary in the list should conform to the parameters of `create_order`.
+
+        Args:
+            orders (List[Dict[str, Any]]): A list of order creation dictionaries.
+
+        Returns:
+            Dict[str, Any]: The API response, likely containing results for each order in the batch.
+                            Example: {'results': [{'order': {...}, 'status': 'accepted/rejected', 'reason': '...'}]}
+        """
+        path = f"{self.portfolio_url}/orders/batched"
+        if not orders:
+             raise ValueError("Orders list cannot be empty for batch creation.")
+        if len(orders) > 20:
+             self.logger.warning(f"Batch size ({len(orders)}) exceeds the typical limit of 20.")
+
+        data = {"orders": orders}
+        return self.post(path, data=data)
+
+    def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        """
+        Cancels (reduces to zero) a specific resting order.
+
+        Args:
+            order_id (str): The unique ID of the order to cancel.
+
+        Returns:
+            Dict[str, Any]: The API response containing the state of the order after cancellation.
+                            Example: {'order': {...}} (with remaining count likely zeroed)
+        """
+        path = f"{self.portfolio_url}/orders/{order_id}"
+        return self.delete(path)
+
+    def batch_cancel_orders(self, order_ids: List[str]) -> Dict[str, Any]:
+        """
+        Cancels a batch of orders (up to 20) by their IDs. Advanced access required.
+
+        Args:
+            order_ids (List[str]): A list of order IDs to cancel.
+
+        Returns:
+            Dict[str, Any]: The API response, likely containing results for each cancellation attempt.
+                            Example: {'results': [{'order_id': ..., 'status': 'cancelled/not_found/error', 'reason': '...'}]}
+        """
+        path = f"{self.portfolio_url}/orders/batched"
+        if not order_ids:
+             raise ValueError("order_ids list cannot be empty for batch cancellation.")
+        if len(order_ids) > 20:
+             self.logger.warning(f"Batch cancel size ({len(order_ids)}) exceeds the typical limit of 20.")
+
+        data = {"ids": order_ids}
+        return self.delete(path, data=data)
+
+    def amend_order(
+        self,
+        order_id: str,
+        count: int,
+        client_order_id: str,
+        updated_client_order_id: str,
+        # Required original fields for validation by API:
+        action: str,
+        side: str,
+        ticker: str,
+        # Optional price amendment fields:
+        yes_price: Optional[int] = None,
+        no_price: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Amends the price and/or maximum fillable count of an existing order.
+
+        NOTE: Requires providing original action, side, ticker, and client_order_id
+              along with a new updated_client_order_id for validation.
+
+        Args:
+            order_id (str): The ID of the order to amend.
+            count (int): The new maximum number of contracts to be filled.
+            client_order_id (str): The *original* client_order_id of the order being amended.
+            updated_client_order_id (str): A *new*, unique client ID for this amended state.
+            action (str): Original order action ('buy'/'sell') for validation.
+            side (str): Original order side ('yes'/'no') for validation.
+            ticker (str): Original order ticker for validation.
+            yes_price (Optional[int]): The new limit price in cents for the 'yes' side.
+            no_price (Optional[int]): The new limit price in cents for the 'no' side.
+                                      Exactly one of yes_price or no_price must be provided.
+
+        Returns:
+            Dict[str, Any]: The API response containing the amended order details.
+                            Example: {'order': {...}}
+
+        Raises:
+            ValueError: If price conditions are not met.
+        """
+        path = f"{self.portfolio_url}/orders/{order_id}/amend"
+        if not (yes_price is not None) ^ (no_price is not None):
+             raise ValueError("Exactly one of 'yes_price' or 'no_price' must be provided for amending.")
+
+        data = {
+            "count": count,
+            "client_order_id": client_order_id, # Original ID
+            "updated_client_order_id": updated_client_order_id, # New ID
+            "yes_price": yes_price,
+            "no_price": no_price,
+            # Include original fields for validation as required by API docs
+            "action": action,
+            "side": side,
+            "ticker": ticker,
+        }
+        payload = {k: v for k, v in data.items() if v is not None}
+        return self.post(path, data=payload)
+
+    def decrease_order(
+        self,
+        order_id: str,
+        reduce_by: Optional[int] = None,
+        reduce_to: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Decreases the number of remaining contracts in an existing order.
+
+        Args:
+            order_id (str): The ID of the order to decrease.
+            reduce_by (Optional[int]): Decrease the remaining count by this amount.
+            reduce_to (Optional[int]): Decrease the remaining count to this amount.
+                                      Exactly one of reduce_by or reduce_to must be provided.
+
+        Returns:
+            Dict[str, Any]: The API response containing the modified order details.
+                            Example: {'order': {...}} (with updated count)
+
+        Raises:
+            ValueError: If neither or both of reduce_by/reduce_to are provided.
+        """
+        path = f"{self.portfolio_url}/orders/{order_id}/decrease"
+        if not (reduce_by is not None) ^ (reduce_to is not None):
+             raise ValueError("Exactly one of 'reduce_by' or 'reduce_to' must be provided.")
+
+        data = {
+            "reduce_by": reduce_by,
+            "reduce_to": reduce_to
+        }
+        payload = {k: v for k, v in data.items() if v is not None}
+        return self.post(path, data=payload)
+
+    def get_positions(
+        self,
+        cursor: Optional[str] = None,
+        limit: int = 100,
+        count_filter: Optional[str] = None,
+        settlement_status: Optional[str] = None,
+        ticker: Optional[str] = None,
+        event_ticker: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches the user's market positions with optional filtering and pagination.
+
+        Args:
+            cursor (Optional[str]): Pagination cursor from a previous request.
+            limit (int): Number of results per page (1-1000). Defaults to 100.
+            count_filter (Optional[str]): Comma-separated list to filter positions with non-zero
+                                          values in 'position', 'total_traded', or 'resting_order_count'.
+            settlement_status (Optional[str]): Filter by settlement status ('all', 'settled', 'unsettled'). Defaults to 'unsettled'.
+            ticker (Optional[str]): Filter positions by market ticker.
+            event_ticker (Optional[str]): Filter positions by event ticker.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of positions and pagination cursor.
+                            Example: {'positions': [...], 'cursor': '...'}
+        """
+        path = f"{self.portfolio_url}/positions"
+        params = {
+            "cursor": cursor,
+            "limit": min(max(limit, 1), 1000),
+            "count_filter": count_filter,
+            "settlement_status": settlement_status,
+            "ticker": ticker,
+            "event_ticker": event_ticker
+        }
+        return self.get(path, params=params)
+
+    def get_portfolio_settlements(
+        self,
+        limit: int = 100,
+        min_ts: Optional[int] = None,
+        max_ts: Optional[int] = None,
+        cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetches the user's settlement history with optional filtering and pagination.
+
+        Args:
+            limit (int): Number of results per page (1-1000). Defaults to 100.
+            min_ts (Optional[int]): Filter settlements at or after this Unix timestamp.
+            max_ts (Optional[int]): Filter settlements at or before this Unix timestamp.
+            cursor (Optional[str]): Pagination cursor from a previous request.
+
+        Returns:
+            Dict[str, Any]: The API response containing the list of settlements and pagination cursor.
+                            Example: {'settlements': [...], 'cursor': '...'}
+        """
+        path = f"{self.portfolio_url}/settlements"
+        params = {
+            "limit": min(max(limit, 1), 1000),
+            "min_ts": min_ts,
+            "max_ts": max_ts,
+            "cursor": cursor
+        }
+        return self.get(path, params=params)
+
+    # --- Structured Target Methods ---
+    def get_structured_target(self, structured_target_id: str) -> Dict[str, Any]:
+        """
+        Fetches data about a specific structured target by its ID.
+
+        Args:
+            structured_target_id (str): The unique ID of the structured target.
+
+        Returns:
+            Dict[str, Any]: The API response containing the structured target details.
+                            Example: {'structured_target': {...}}
+        """
+        path = f"{self.structured_targets_url}/{structured_target_id}"
+        # Assuming response structure is {'structured_target': {...}}
+        return self.get(path)
+
+    def get_bid_ask_spread(self, ticker: str) -> Optional[int]:
+        """
+        Calculates the current bid-ask spread for the 'yes' side of a market.
+
+        The spread is the difference between the lowest ask price and the highest bid price.
+        Note: In the Kalshi API response, 'yes' bids are under 'yes', but 'yes' asks are under 'no'.
+
+        Args:
+            ticker (str): The unique ticker for the market.
+
+        Returns:
+            Optional[int]: The bid-ask spread in cents, or None if the spread cannot be calculated
+                           (e.g., empty order book, missing bids or asks).
+
+        Raises:
+            HTTPError: If the API call to get the order book fails (other than 404).
+            ValueError: If the order book response is invalid.
+        """
+        self.logger.info(f"Fetching order book to calculate spread for ticker: {ticker}")
+        try:
+            # Fetch the full order book first
+            orderbook_response = self.get_market_orderbook(ticker=ticker)
+            # Example structure: {'orderbook': {'yes': [[90, 10], [88, 5]], 'no': [[92, 8], [95, 12]]}}
+            # 'yes' list contains bids for 'yes' contracts (sorted high to low)
+            # 'no' list contains asks for 'yes' contracts (sorted low to high)
+
+        except HTTPError as e:
+            # Log specific error for spread calculation context
+            self.logger.error(f"Failed to get order book for spread calculation (ticker: {ticker}): {e}", exc_info=True)
+            # Re-raise the original error to signal the API failure
+            raise
+        except Exception as e:
+             self.logger.error(f"Unexpected error getting order book for spread (ticker: {ticker}): {e}", exc_info=True)
+             raise # Re-raise unexpected errors
+
+        if not orderbook_response or 'orderbook' not in orderbook_response:
+            self.logger.warning(f"Invalid or empty order book data received for ticker: {ticker}")
+            return None
+
+        orderbook = orderbook_response['orderbook']
+        yes_bids = orderbook.get('yes', [])
+        yes_asks = orderbook.get('no', []) # Asks for 'yes' contracts are on the 'no' side
+
+        # Ensure lists are not empty and contain valid price/size pairs
+        if not yes_bids or not isinstance(yes_bids[0], list) or len(yes_bids[0]) < 1:
+            highest_bid = None
+            self.logger.debug(f"No valid bids found for 'yes' side of {ticker}.")
+        else:
+            # Assuming bids are sorted [[price, size], ...] descending by price
+            highest_bid = yes_bids[0][0] # Price is the first element
+
+        if not yes_asks or not isinstance(yes_asks[0], list) or len(yes_asks[0]) < 1:
+            lowest_ask = None
+            self.logger.debug(f"No valid asks found for 'yes' side of {ticker} (checked 'no' side of orderbook).")
+        else:
+            # Assuming asks are sorted [[price, size], ...] ascending by price
+            lowest_ask = yes_asks[0][0] # Price is the first element
+
+        if highest_bid is not None and lowest_ask is not None:
+            # Ensure prices are integers before subtraction
+            try:
+                highest_bid_int = int(highest_bid)
+                lowest_ask_int = int(lowest_ask)
+                spread = lowest_ask_int - highest_bid_int
+                self.logger.info(f"Calculated spread for {ticker}: Ask={lowest_ask_int}, Bid={highest_bid_int}, Spread={spread}")
+                # Ensure spread is non-negative, although theoretically lowest ask >= highest bid
+                return max(0, spread)
+            except (ValueError, TypeError) as e:
+                 self.logger.error(f"Error converting bid/ask to int for spread calculation (ticker: {ticker}): Bid={highest_bid}, Ask={lowest_ask}. Error: {e}")
+                 return None
+        else:
+            self.logger.warning(f"Could not calculate spread for {ticker}: Missing bids ({highest_bid is None}) or asks ({lowest_ask is None}). Bids: {yes_bids}, Asks: {yes_asks}")
+            return None
+
+
+# --- WebSocket Client (Keep existing code below) ---
 class KalshiWebSocketClient(KalshiBaseClient):
     """
     Client for interacting with the Kalshi WebSocket API (v2).
@@ -385,7 +1266,8 @@ class KalshiWebSocketClient(KalshiBaseClient):
                     continue
 
                 host = f"{self.WS_BASE_URL}{self.url_suffix}"
-                auth_headers = self.request_headers("GET", self.url_suffix)
+                # Use the base class method for headers, ensuring body is None for WS GET
+                auth_headers = self.request_headers("GET", self.url_suffix, body=None)
                 logger.info(f"Attempting to connect to WebSocket: {host}")
                 websocket = None # Define websocket in the outer scope for finally block
                 try:
@@ -560,10 +1442,6 @@ class KalshiWebSocketClient(KalshiBaseClient):
             ConnectionError: If the WebSocket is not connected.
             Exception: If sending fails.
         """
-        # Do not acquire lock here, assume caller (public methods) handles it
-        # or that connect() ensures _websocket is valid before _handler runs.
-        # If called outside the connection loop context, it needs protection.
-        # Let's assume it's called by methods that ensure connection or handle errors.
         if not self._is_connected or not self._websocket:
             raise ConnectionError("WebSocket is not connected.")
 
@@ -571,8 +1449,6 @@ class KalshiWebSocketClient(KalshiBaseClient):
         self._message_id_counter += 1
         command['id'] = cmd_id
 
-        # Store command details before sending
-        # Make a copy to avoid modification issues if command dict is reused
         self._pending_commands[cmd_id] = command.copy()
 
         try:
@@ -585,7 +1461,6 @@ class KalshiWebSocketClient(KalshiBaseClient):
              self._pending_commands.pop(cmd_id, None) # Clean up pending command
              raise ConnectionError(f"WebSocket closed while trying to send command: {e}") from e
         except Exception as e:
-            # Clean up pending command if send fails
             self._pending_commands.pop(cmd_id, None)
             logger.error(f"Failed to send command (ID: {cmd_id}): {e}")
             raise
@@ -624,11 +1499,8 @@ class KalshiWebSocketClient(KalshiBaseClient):
             params["market_ticker"] = market_ticker
         elif market_tickers:
             params["market_tickers"] = market_tickers
-        # Else: All markets mode (no market param)
 
         command = {"cmd": "subscribe", "params": params}
-        # Acquire lock here if sending can happen outside the main connection loop context
-        # async with self._connect_lock: # Consider if needed
         return await self._send_command(command)
 
     async def unsubscribe(self, sids: List[int]) -> int:
@@ -642,13 +1514,13 @@ class KalshiWebSocketClient(KalshiBaseClient):
             The command ID for this unsubscription request.
 
         Raises:
+            ValueError: If sids list is empty.
             ConnectionError: If not connected.
             Exception: If sending fails.
         """
         if not sids:
              raise ValueError("sids list cannot be empty for unsubscribe.")
         command = {"cmd": "unsubscribe", "params": {"sids": sids}}
-        # async with self._connect_lock: # Consider if needed
         return await self._send_command(command)
 
     async def update_subscription(
@@ -682,22 +1554,27 @@ class KalshiWebSocketClient(KalshiBaseClient):
         if not market_ticker and not market_tickers:
              raise ValueError("Must provide market_ticker or market_tickers for update.")
 
-        params = {"sids": [sid], "action": action} # API expects sids as a list, even for one
+        params = {"sids": [sid], "action": action}
         if market_ticker:
             params["market_ticker"] = market_ticker
         elif market_tickers:
             params["market_tickers"] = market_tickers
 
         command = {"cmd": "update_subscription", "params": params}
-        # async with self._connect_lock: # Consider if needed
         return await self._send_command(command)
 
     # --- Message Processing ---
 
-    async def _on_message(self, message: str):
+    async def _on_message(self, message: Union[str, bytes]):
         """Handles incoming WebSocket messages."""
         try:
-            data = json.loads(message)
+            # Ensure message is string for JSON decoding
+            if isinstance(message, bytes):
+                message_str = message.decode('utf-8')
+            else:
+                message_str = message
+
+            data = json.loads(message_str)
             logger.debug(f"Received message: {data}")
 
             # General message callback first
@@ -732,11 +1609,11 @@ class KalshiWebSocketClient(KalshiBaseClient):
                         logger.error(f"Error executing registered callback for {msg_type}: {cb_err}", exc_info=True)
 
         except json.JSONDecodeError:
-            logger.error(f"Failed to decode JSON message: {message[:200]}...")
+            logger.error(f"Failed to decode JSON message: {message_str[:200] if isinstance(message_str, str) else message[:200]}...")
+        except UnicodeDecodeError:
+             logger.error(f"Failed to decode message bytes: {message[:200]}...")
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
-            # Don't trigger on_error_callback here, as it might be a processing issue,
-            # not a connection issue. Let higher levels handle processing errors if needed.
 
     # --- Internal Message Handlers ---
 
@@ -745,41 +1622,41 @@ class KalshiWebSocketClient(KalshiBaseClient):
         cmd_id = data.get("id")
         msg_data = data.get("msg", {})
         sid = msg_data.get("sid")
-        channel = msg_data.get("channel")
+        channel = msg_data.get("channel") # Note: API v2 might return 'channels' list here
 
-        if cmd_id is None or sid is None or channel is None:
+        if cmd_id is None or sid is None or channel is None: # Adjust check if 'channels' is returned
              logger.warning(f"Received incomplete 'subscribed' message: {data}")
              return
 
         pending_cmd = self._pending_commands.get(cmd_id)
         if pending_cmd:
-            # Associate sid with the original command details
             original_params = pending_cmd.get('params', {})
+            # Determine markets from original request
             markets = original_params.get('market_tickers') or \
                       ([original_params.get('market_ticker')] if original_params.get('market_ticker') else ['ALL'])
 
+            # Store subscription details
             self._subscriptions[sid] = {
-                'channel': channel,
-                'markets': markets,
+                'channel': channel, # Store the specific channel confirmed by this message
+                'markets': markets, # Store the markets intended for the original command
                 'cmd_id': cmd_id,
-                'original_params': original_params # Store original params for potential resubscribe
+                'original_params': original_params # Store for potential resubscribe
             }
             logger.info(f"Subscription confirmed: sid={sid}, channel={channel}, markets={markets}, cmd_id={cmd_id}")
 
-            # TODO: Need logic to determine when a command ID is fully resolved
-            # if multiple channels were in the original request.
-            # For now, we don't remove the pending command here, assume one channel per subscribe for simplicity,
-            # or handle removal when all expected sids for a cmd_id arrive.
-            # Let's tentatively remove it, assuming simple cases work.
-            # self._pending_commands.pop(cmd_id, None) # Revisit this logic
+            # TODO: Refine logic for removing pending command if multiple channels were requested.
+            # If original command requested multiple channels, wait for all confirmations?
+            # For now, remove it assuming simple cases or that 'ok' handles multi-channel updates.
+            self._pending_commands.pop(cmd_id, None)
 
         else:
             logger.warning(f"Received 'subscribed' confirmation for unknown/completed command ID: {cmd_id}, sid: {sid}")
 
     async def _handle_unsubscribed(self, data: Dict[str, Any]):
         """Handles 'unsubscribed' confirmation messages."""
-        sid = data.get("sid")
-        cmd_id = data.get("id") # Unsubscribe command *might* have an ID in response? Docs unclear. Assume not usually.
+        msg_data = data.get("msg", {})
+        sid = msg_data.get("sid") # API v2 seems to put sid inside 'msg'
+        cmd_id = data.get("id")
 
         if sid is None:
              logger.warning(f"Received incomplete 'unsubscribed' message: {data}")
@@ -788,20 +1665,12 @@ class KalshiWebSocketClient(KalshiBaseClient):
         if sid in self._subscriptions:
             removed_sub = self._subscriptions.pop(sid)
             logger.info(f"Unsubscribed successfully: sid={sid}, channel={removed_sub.get('channel')}")
-            # Also remove associated orderbook data if it exists
-            # This assumes one market per orderbook subscription, which might be wrong.
-            # Need better mapping if multiple markets share an orderbook sid.
-            # market_to_clear = removed_sub.get('markets', [None])[0] # Simplistic guess
-            # if market_to_clear and market_to_clear != 'ALL':
-            #      self._orderbooks.pop(market_to_clear, None)
-
+            # Clean up associated orderbook data if necessary
+            # This needs a robust mapping from sid to market(s)
         else:
             logger.warning(f"Received 'unsubscribed' confirmation for unknown sid: {sid}")
 
-        # If the unsubscribe command itself had an ID we were tracking
         if cmd_id and cmd_id in self._pending_commands:
-            # TODO: Similar to subscribe, need logic if one command unsubscribed multiple sids.
-            # Tentatively remove.
             self._pending_commands.pop(cmd_id, None)
             logger.debug(f"Removed pending unsubscribe command ID: {cmd_id}")
 
@@ -809,8 +1678,9 @@ class KalshiWebSocketClient(KalshiBaseClient):
     async def _handle_ok(self, data: Dict[str, Any]):
         """Handles 'ok' confirmation messages (e.g., for update_subscription)."""
         cmd_id = data.get("id")
-        sid = data.get("sid")
-        updated_markets = data.get("market_tickers") # API returns full list
+        msg_data = data.get("msg", {})
+        sid = msg_data.get("sid")
+        updated_markets = msg_data.get("market_tickers") # API v2 puts details in 'msg'
 
         if cmd_id is None or sid is None:
              logger.warning(f"Received incomplete 'ok' message: {data}")
@@ -821,13 +1691,15 @@ class KalshiWebSocketClient(KalshiBaseClient):
             logger.info(f"Command confirmed (OK): cmd_id={cmd_id}, sid={sid}")
             if sid in self._subscriptions:
                  if updated_markets is not None:
+                      # Update the markets list associated with this subscription
                       self._subscriptions[sid]['markets'] = updated_markets
-                      # Update original params as well?
+                      # Also update the stored original params for accurate resubscription
                       self._subscriptions[sid]['original_params']['market_tickers'] = updated_markets
-                      self._subscriptions[sid]['original_params'].pop('market_ticker', None)
+                      self._subscriptions[sid]['original_params'].pop('market_ticker', None) # Remove single ticker if list is now present
                       logger.info(f"Subscription updated: sid={sid}, new markets list={updated_markets}")
                  else:
-                      logger.warning(f"Received 'ok' for sid {sid} but no 'market_tickers' field in response.")
+                      # OK might confirm actions other than market updates
+                      logger.info(f"Received 'ok' for sid {sid} without market updates (e.g., unsubscribe confirmation).")
             else:
                  logger.warning(f"Received 'ok' for unknown sid: {sid}")
             self._pending_commands.pop(cmd_id, None)
@@ -841,107 +1713,86 @@ class KalshiWebSocketClient(KalshiBaseClient):
         error_msg = error_msg_data.get("msg", "Unknown error")
         error_code = error_msg_data.get("code", -1)
 
-        # Log with more context if the command is known
         pending_cmd_details = ""
         if cmd_id and cmd_id in self._pending_commands:
             pending_cmd_details = f" (Command: {self._pending_commands[cmd_id].get('cmd', 'N/A')}, Params: {self._pending_commands[cmd_id].get('params', {})})"
-            # Remove the failed command
             self._pending_commands.pop(cmd_id, None)
         elif cmd_id:
              pending_cmd_details = f" (Command ID was {cmd_id}, but not found in pending list)"
 
-
         logger.error(f"Command failed: code={error_code}, message='{error_msg}'{pending_cmd_details}")
-
-        # Handle specific errors, e.g., resubscribe on sequence gap errors if applicable
-        # if error_code == SOME_SEQUENCE_ERROR_CODE:
-        #     await self._trigger_resubscribe_for_sid(...)
-
 
     async def _handle_ticker(self, data: Dict[str, Any]):
         """Handles 'ticker' data messages."""
-        # No internal state update needed, callbacks handled by _on_message
         logger.debug(f"Processed ticker message for sid {data.get('sid')}")
-        pass
+        pass # Callbacks handled by _on_message
 
     async def _handle_trade(self, data: Dict[str, Any]):
         """Handles 'trade' data messages."""
-        # No internal state update needed, callbacks handled by _on_message
         logger.debug(f"Processed trade message for sid {data.get('sid')}")
-        pass
+        pass # Callbacks handled by _on_message
 
     async def _handle_fill(self, data: Dict[str, Any]):
         """Handles 'fill' data messages."""
-        # No internal state update needed, callbacks handled by _on_message
         logger.debug(f"Processed fill message for sid {data.get('sid')}")
-        pass
+        pass # Callbacks handled by _on_message
 
     async def _handle_orderbook_snapshot(self, data: Dict[str, Any]):
         """Handles 'orderbook_snapshot' messages."""
         sid = data.get("sid")
-        seq = data.get("seq")
         msg = data.get("msg", {})
+        seq = msg.get("seq") # Seq number inside msg
         market_ticker = msg.get("market_ticker")
 
         if not market_ticker or sid is None or seq is None:
             logger.warning(f"Received incomplete orderbook snapshot: {data}")
             return
 
-        # TODO: Check if sid corresponds to an active orderbook subscription
-        if sid not in self._subscriptions or self._subscriptions[sid]['channel'] != 'orderbook_delta':
+        if sid not in self._subscriptions or self._subscriptions[sid]['channel'] not in ['orderbook_delta', 'orderbook_snapshot']: # Allow snapshot channel too
              logger.warning(f"Received orderbook snapshot for non-orderbook or unknown sid: {sid}")
              return
 
         logger.info(f"Received orderbook snapshot for {market_ticker} (sid: {sid}, seq: {seq})")
-        # Replace the entire orderbook state for this market
-        # This assumes one market per orderbook subscription SID. If multiple markets can share
-        # an SID (e.g. via update_subscription), this logic needs adjustment.
         self._orderbooks[market_ticker] = {
             "yes": msg.get("yes", []),
             "no": msg.get("no", []),
-            "last_seq": seq # Store sequence number
+            "last_seq": seq
         }
-        # Callbacks handled by _on_message
 
     async def _handle_orderbook_delta(self, data: Dict[str, Any]):
         """Handles 'orderbook_delta' messages."""
         sid = data.get("sid")
-        seq = data.get("seq")
         msg = data.get("msg", {})
+        seq = msg.get("seq") # Seq number inside msg
         market_ticker = msg.get("market_ticker")
         price = msg.get("price")
         delta = msg.get("delta")
-        side = msg.get("side") # "yes" or "no"
+        side = msg.get("side")
 
         if not market_ticker or sid is None or seq is None or price is None or delta is None or side not in ["yes", "no"]:
             logger.warning(f"Received incomplete orderbook delta: {data}")
             return
 
-        # Check if sid corresponds to an active orderbook subscription
         if sid not in self._subscriptions or self._subscriptions[sid]['channel'] != 'orderbook_delta':
              logger.warning(f"Received orderbook delta for non-orderbook or unknown sid: {sid}")
              return
 
-        # Check if we have a snapshot for this market
         if market_ticker not in self._orderbooks:
-             logger.warning(f"Received delta for {market_ticker} (sid: {sid}) before snapshot. State inconsistent. Requesting resubscribe might be needed.")
-             # TODO: Trigger resubscribe logic for this sid
+             logger.warning(f"Received delta for {market_ticker} (sid: {sid}) before snapshot. State inconsistent.")
+             # TODO: Optionally trigger resubscribe or request snapshot
              return
 
-        # Check sequence number
         last_seq = self._orderbooks[market_ticker].get("last_seq", 0)
         if seq <= last_seq:
              logger.debug(f"Received old or duplicate delta for {market_ticker} (sid: {sid}). Expected > {last_seq}, got {seq}. Ignoring.")
              return
         if seq != last_seq + 1:
-             logger.warning(f"Sequence gap detected for {market_ticker} (sid: {sid})! Expected {last_seq + 1}, got {seq}. Orderbook state might be inconsistent. Requesting resubscribe.")
-             # TODO: Trigger resubscribe logic for this sid
-             # Don't apply the delta if sequence is wrong, wait for snapshot/resubscribe
-             return
+             logger.warning(f"Sequence gap detected for {market_ticker} (sid: {sid})! Expected {last_seq + 1}, got {seq}. Orderbook state might be inconsistent.")
+             # TODO: Trigger resubscribe or request snapshot
+             return # Don't apply delta if sequence is wrong
 
         logger.debug(f"Applying orderbook delta for {market_ticker} (sid: {sid}, seq: {seq}): price={price}, delta={delta}, side={side}")
 
-        # Apply the delta
         book_side = self._orderbooks[market_ticker].get(side, [])
         new_book_side = []
         updated = False
@@ -949,40 +1800,34 @@ class KalshiWebSocketClient(KalshiBaseClient):
         for level_price, level_contracts in book_side:
             if level_price == price:
                 new_contracts = level_contracts + delta
-                if new_contracts > 0: # Keep level if contracts remain
+                if new_contracts > 0:
                     new_book_side.append([level_price, new_contracts])
-                # Else: Level removed if contracts <= 0
                 updated = True
             else:
                 new_book_side.append([level_price, level_contracts])
 
-        if not updated and delta > 0: # Add new price level if it didn't exist and delta is positive
+        if not updated and delta > 0:
             new_book_side.append([price, delta])
-            # Keep the book sorted by price
-            # Yes side: Lower prices (higher bids) first? -> Ascending price
-            # No side: Higher prices (lower asks) first? -> Ascending price
-            # Let's assume ascending price sort for both sides for internal representation
+            # Sort based on price - assuming ascending for both sides
             new_book_side.sort(key=lambda x: x[0])
 
-        self._orderbooks[market_ticker][side] = new_book_side # Update the stored side
-        self._orderbooks[market_ticker]["last_seq"] = seq # Update sequence number
-
-        # Callbacks handled by _on_message
+        self._orderbooks[market_ticker][side] = new_book_side
+        self._orderbooks[market_ticker]["last_seq"] = seq
 
     async def _handle_market_lifecycle(self, data: Dict[str, Any]):
         """Handles 'market_lifecycle' messages."""
         logger.debug(f"Processed market_lifecycle message for sid {data.get('sid')}")
-        pass # Callbacks handled by _on_message
+        pass
 
     async def _handle_event_lifecycle(self, data: Dict[str, Any]):
         """Handles 'event_lifecycle' messages."""
         logger.debug(f"Processed event_lifecycle message for sid {data.get('sid')}")
-        pass # Callbacks handled by _on_message
+        pass
 
     async def _handle_multivariate_lookup(self, data: Dict[str, Any]):
         """Handles 'multivariate_lookup' messages."""
         logger.debug(f"Processed multivariate_lookup message for sid {data.get('sid')}")
-        pass # Callbacks handled by _on_message
+        pass
 
     # --- Callback Registration ---
 
@@ -1016,51 +1861,77 @@ class KalshiWebSocketClient(KalshiBaseClient):
     # --- Recovery and Resubscription ---
     async def _resubscribe(self):
         """Resubscribes using the original parameters of active subscriptions upon reconnection."""
-        # This attempts to reconstruct subscribe commands based on stored original params.
         if not self._subscriptions:
              logger.info("No active subscriptions to resubscribe.")
              return
 
         logger.info(f"Attempting to resubscribe to {len(self._subscriptions)} previous subscriptions...")
-        subscriptions_to_resend = list(self._subscriptions.values()) # Get details before clearing
+        # Group subscriptions by original command ID to potentially batch resubscriptions
+        commands_to_resend = defaultdict(lambda: {'channels': set(), 'market_ticker': None, 'market_tickers': set()})
+        sids_to_clear = list(self._subscriptions.keys()) # Get sids before modifying dict
 
-        # Clear current state before resubscribing
-        self._subscriptions.clear()
-        self._pending_commands.clear() # Clear pending from previous connection
-        self._orderbooks.clear() # Orderbooks need fresh snapshots
-
-        for sub_details in subscriptions_to_resend:
+        for sid, sub_details in self._subscriptions.items():
              original_params = sub_details.get('original_params')
-             if not original_params:
-                  logger.warning(f"Cannot resubscribe for sid {sub_details.get('sid', 'N/A')}: Original parameters not found.")
+             cmd_id = sub_details.get('cmd_id') # Use original cmd_id if available for grouping
+             if not original_params or not cmd_id:
+                  logger.warning(f"Cannot resubscribe for sid {sid}: Original parameters or cmd_id not found.")
                   continue
 
              channels = original_params.get('channels')
-             market_ticker = original_params.get('market_ticker')
-             market_tickers = original_params.get('market_tickers')
-
              if not channels:
-                  logger.warning(f"Cannot resubscribe for sid {sub_details.get('sid', 'N/A')}: No channels found in original parameters.")
+                  logger.warning(f"Cannot resubscribe for sid {sid}: No channels found in original parameters.")
                   continue
 
+             # Add channels to the set for this command
+             commands_to_resend[cmd_id]['channels'].update(channels)
+
+             # Consolidate market info - prioritize market_tickers if present
+             if 'market_tickers' in original_params:
+                  commands_to_resend[cmd_id]['market_tickers'].update(original_params['market_tickers'])
+             elif 'market_ticker' in original_params:
+                  # If only single tickers were used, collect them. If 'ALL' was used, keep it separate.
+                  ticker = original_params['market_ticker']
+                  if ticker == 'ALL':
+                       commands_to_resend[cmd_id]['market_ticker'] = 'ALL' # Mark as all markets
+                  elif commands_to_resend[cmd_id]['market_ticker'] != 'ALL': # Don't add if already marked as ALL
+                       commands_to_resend[cmd_id]['market_tickers'].add(ticker)
+
+
+        # Clear current state before resubscribing
+        self._subscriptions.clear()
+        self._pending_commands.clear()
+        self._orderbooks.clear()
+
+        # Send the reconstructed subscribe commands
+        for cmd_id, params_to_send in commands_to_resend.items():
+             channels_list = list(params_to_send['channels'])
+             market_ticker_final = None
+             market_tickers_final = None
+
+             if params_to_send['market_ticker'] == 'ALL':
+                  market_ticker_final = None # Use 'all markets' mode
+                  market_tickers_final = None
+             elif params_to_send['market_tickers']:
+                  market_tickers_final = list(params_to_send['market_tickers'])
+                  # Decide if single ticker optimization is useful (API might prefer list)
+                  # if len(market_tickers_final) == 1:
+                  #      market_ticker_final = market_tickers_final[0]
+                  #      market_tickers_final = None
+             # Else: No specific markets specified (should imply 'ALL' for supported channels)
+
              try:
-                  log_markets = market_ticker or market_tickers or "ALL"
-                  logger.info(f"Resubscribing to channels {channels} for markets {log_markets}")
-                  # Use the public subscribe method which handles command sending and tracking
+                  log_markets = market_ticker_final or market_tickers_final or "ALL"
+                  logger.info(f"Resubscribing to channels {channels_list} for markets {log_markets}")
                   await self.subscribe(
-                       channels=channels,
-                       market_ticker=market_ticker,
-                       market_tickers=market_tickers
+                       channels=channels_list,
+                       market_ticker=market_ticker_final,
+                       market_tickers=market_tickers_final
                   )
              except ConnectionError:
-                  logger.error(f"Connection lost during resubscribe attempt for {channels}. Will retry on next connection.")
-                  # If connection drops during resubscribe, the loop will handle reconnecting again.
+                  logger.error(f"Connection lost during resubscribe attempt for {channels_list}. Will retry on next connection.")
                   break # Stop trying to resubscribe on this attempt
              except Exception as e:
-                  logger.error(f"Failed to resubscribe to {channels} for {log_markets}: {e}")
-
-        # TODO: Resend any commands that were genuinely pending (not subscription confirmations)
-        # This requires better tracking of command types in _pending_commands.
+                  logger.error(f"Failed to resubscribe to {channels_list} for {log_markets}: {e}")
 
 
     # --- Helper Methods ---
@@ -1080,156 +1951,128 @@ class KalshiWebSocketClient(KalshiBaseClient):
               return json.loads(json.dumps(self._orderbooks[market_ticker]))
          return None
 
-# Example Usage (requires async context)
-# async def main():
-#     # Load key_id and private_key securely (e.g., from env vars or config)
-#     # IMPORTANT: Replace with your actual key loading mechanism
-#     try:
-#         key_id = os.environ["KALSHI_API_KEY_ID"]
-#         private_key_pem = os.environ["KALSHI_PRIVATE_KEY"] # Expects PEM format in env var
-#         private_key_password = os.environ.get("KALSHI_PRIVATE_KEY_PASSWORD") # Optional password
-#     except KeyError:
-#         print("Error: Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY environment variables.")
-#         return
-
-#     try:
-#         private_key = serialization.load_pem_private_key(
-#             private_key_pem.encode(),
-#             password=private_key_password.encode() if private_key_password else None
-#         )
-#     except Exception as e:
-#         print(f"Error loading private key: {e}")
-#         return
-
-#     async def handle_ticker(ticker_data):
-#         print(f"Callback - Ticker: {ticker_data.get('market_ticker')} Price: {ticker_data.get('price')}")
-
-#     async def handle_orderbook_update(orderbook_data):
-#         # This callback gets the raw snapshot/delta message 'msg' part
-#         print(f"Callback - Orderbook Update ({orderbook_data.get('market_ticker')}): {orderbook_data}")
-
-#     async def handle_fill(fill_data):
-#         print(f"Callback - Fill: {fill_data}")
-
-#     async def handle_all_messages(msg):
-#          # Example: Print only non-data messages for debugging
-#          if msg.get("type") not in ["ticker", "trade", "fill", "orderbook_snapshot", "orderbook_delta"]:
-#               print(f"Raw Message: {msg}")
-#          pass
-
-#     async def handle_error(error):
-#          print(f"WebSocket Error Callback: {error}")
-
-#     async def handle_close(code, reason):
-#          print(f"WebSocket Close Callback: Code={code}, Reason='{reason}'")
-
-#     async def handle_open():
-#          print("WebSocket Open Callback: Connection established!")
-
-
-#     # --- Client Initialization ---
-#     client = KalshiWebSocketClient(
-#          key_id,
-#          private_key,
-#          environment=Environment.DEMO, # Use Environment.PROD for production
-#          on_message_callback=handle_all_messages,
-#          on_error_callback=handle_error,
-#          on_close_callback=handle_close,
-#          on_open_callback=handle_open
-#     )
-
-#     # --- Register Callbacks for Specific Types ---
-#     client.register_callback("ticker", handle_ticker)
-#     client.register_callback("orderbook_snapshot", handle_orderbook_update)
-#     client.register_callback("orderbook_delta", handle_orderbook_update)
-#     client.register_callback("fill", handle_fill)
-
-#     # --- Connect and Subscribe ---
-#     await client.connect() # Start connection loop (runs in background)
-
-#     # Wait briefly for connection before subscribing
-#     # A more robust approach uses an event set by on_open_callback
-#     await asyncio.sleep(3)
-
-#     if not client._is_connected:
-#          print("Failed to connect after initial wait.")
-#          return
-
-#     try:
-#         # Subscribe to ticker for specific markets
-#         cmd_id_ticker = await client.subscribe(channels=["ticker"], market_tickers=["INX-DEMO", "FEDFUND-DEMO"])
-#         print(f"Sent ticker subscription request (ID: {cmd_id_ticker})")
-
-#         # Subscribe to orderbook for specific markets
-#         cmd_id_ob = await client.subscribe(channels=["orderbook_delta"], market_tickers=["INX-DEMO"])
-#         print(f"Sent orderbook subscription request (ID: {cmd_id_ob})")
-
-#         # Subscribe to fills for all markets
-#         cmd_id_fill = await client.subscribe(channels=["fill"])
-#         print(f"Sent fill subscription request (ID: {cmd_id_fill})")
-
-
-#         # --- Keep the client running ---
-#         print("Client running. Listening for messages for 60 seconds...")
-#         await asyncio.sleep(60) # Keep running
-
-#         # --- Example: Get current orderbook state ---
-#         inx_ob = client.get_orderbook("INX-DEMO")
-#         if inx_ob:
-#              print("\n--- Current INX-DEMO Orderbook ---")
-#              print(f"Last Seq: {inx_ob.get('last_seq')}")
-#              print(f"Yes Bids: {inx_ob.get('yes')}") # Assuming yes = bids
-#              print(f"No Asks: {inx_ob.get('no')}")   # Assuming no = asks
-#              print("---------------------------------")
-
-
-#         # --- Example: Unsubscribe ---
-#         # Need to get the SID from the 'subscribed' message or track it.
-#         # This requires more robust state management than shown in this basic example.
-#         # sid_to_unsubscribe = ... # Get SID from self._subscriptions
-#         # if sid_to_unsubscribe:
-#         #     cmd_id_unsub = await client.unsubscribe(sids=[sid_to_unsubscribe])
-#         #     print(f"Sent unsubscribe request (ID: {cmd_id_unsub})")
-#         #     await asyncio.sleep(5)
-
-
-#     except ConnectionError as e:
-#          print(f"Operation failed due to connection error: {e}")
-#     except ValueError as e:
-#          print(f"Operation failed due to invalid value: {e}")
-#     except Exception as e:
-#          print(f"An unexpected error occurred: {e}", exc_info=True)
-#     finally:
-#         print("Disconnecting client...")
-#         await client.disconnect()
-#         print("Client disconnected.")
-
-# if __name__ == "__main__":
-#      # Setup logging properly here
-#      log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-#      logging.basicConfig(level=logging.INFO, format=log_format)
-#      # Set websockets logger level higher to reduce noise if needed
-#      logging.getLogger('websockets').setLevel(logging.WARNING)
-
-#      try:
-#           asyncio.run(main())
-#      except KeyboardInterrupt:
-#           print("Interrupted by user.")
-
+# --- Utility Functions (Keep existing code below) ---
 def detect_ticker_type(ticker: str) -> str:
+    """
+    Detects whether a Kalshi ticker represents a series, event, or market.
+
+    Args:
+        ticker (str): The Kalshi ticker string.
+
+    Returns:
+        str: 'series', 'event', or 'market'.
+    """
     if '-' not in ticker:
+        # Series tickers typically don't have hyphens (e.g., KXCPIYOY)
+        # This is a heuristic and might need refinement based on all possible ticker formats.
+        # Assuming tickers starting with KX and no hyphens are series.
         if ticker.startswith('KX'):
             return 'series'
-        return 'market'
+        # Fallback assumption for non-hyphenated, non-KX tickers (if any exist)
+        return 'market' # Or potentially 'unknown'
 
     parts = ticker.split('-')
 
-    # Handle event tickers (one hyphen)
+    # Event tickers often have one hyphen (e.g., KXCPIYOY-25MAR)
     if len(parts) == 2 and ticker.startswith('KX'):
+        # Further checks could involve validating the date part if needed
         return 'event'
 
-    # Handle market tickers (two hyphens)
-    if len(parts) == 3 and ticker.startswith('KX'):
+    # Market tickers often have two hyphens (e.g., KXCPIYOY-25MAR-T2.5)
+    if len(parts) >= 3 and ticker.startswith('KX'): # Use >= 3 for flexibility
+        # Further checks could involve validating the structure (e.g., '-T' part)
         return 'market'
 
-    return 'market'  # Default case
+    # Default or fallback if pattern doesn't match known types
+    # Could be a less common format or an error. Defaulting to market might be risky.
+    # Consider returning 'unknown' or raising an error for unrecognized formats.
+    logger.warning(f"Could not definitively determine ticker type for '{ticker}'. Defaulting to 'market'.")
+    return 'market'
+
+def calculate_bid_ask_spread(orderbook):
+    """
+    Calculate the bid-ask spread and other metrics from a Kalshi orderbook
+    
+    Args:
+        orderbook (dict): The Kalshi orderbook object with structure {orderbook: {yes: [...], no: [...]}}
+    
+    Returns:
+        dict: Object containing bid-ask spread metrics and market analysis
+    
+    Raises:
+        ValueError: If the orderbook format is invalid
+    """
+    # Input validation
+    if not isinstance(orderbook, dict) or 'orderbook' not in orderbook:
+        raise ValueError('Invalid orderbook format. Expected {orderbook: {yes: [...], no: [...]}}')
+    
+    if 'yes' not in orderbook['orderbook'] or 'no' not in orderbook['orderbook']:
+        raise ValueError('Invalid orderbook format. Expected both yes and no arrays')
+    
+    # Sort arrays by price
+    yes_bids = sorted(orderbook['orderbook']['yes'], key=lambda x: x[0], reverse=True)
+    no_asks = sorted(orderbook['orderbook']['no'], key=lambda x: x[0])
+    
+    # Get best bid (highest price someone is willing to buy at)
+    best_bid = yes_bids[0][0] if yes_bids else 0
+    best_bid_volume = yes_bids[0][1] if yes_bids else 0
+    
+    # Get best ask (lowest price someone is willing to sell at)
+    best_ask = no_asks[0][0] if no_asks else 100
+    best_ask_volume = no_asks[0][1] if no_asks else 0
+    
+    # Calculate spread
+    spread = best_ask - best_bid
+    spread_percentage = (spread / best_ask) * 100 if best_ask != 0 else 0
+    
+    # Calculate mid price
+    mid_price = (best_bid + best_ask) / 2
+    
+    # Calculate total volumes
+    total_yes_volume = sum(order[1] for order in orderbook['orderbook']['yes'])
+    total_no_volume = sum(order[1] for order in orderbook['orderbook']['no'])
+    
+    # Calculate liquidity within 5¢ of best prices
+    liquidity_near_bid = sum(
+        order[1] for order in orderbook['orderbook']['yes'] 
+        if 0 <= best_bid - order[0] <= 5
+    )
+    
+    liquidity_near_ask = sum(
+        order[1] for order in orderbook['orderbook']['no']
+        if 0 <= order[0] - best_ask <= 5
+    )
+    
+    # Check for crossed market (negative spread)
+    is_crossed_market = spread < 0
+    
+    # Determine implied probability based on mid price
+    implied_probability = mid_price
+    
+    # Calculate theoretical fair value (in a prediction market, YES + NO should = 100)
+    fair_value_gap = 100 - (best_bid + (100 - best_ask))
+    
+    # Create results dictionary
+    results = {
+        # Basic spread data
+        'best_bid': best_bid,
+        'best_bid_volume': best_bid_volume,
+        'best_ask': best_ask,
+        'best_ask_volume': best_ask_volume,
+        'spread': spread,
+        'spread_percentage': spread_percentage,
+        'mid_price': mid_price,
+        
+        # Market analysis
+        'implied_probability': implied_probability,
+        'is_crossed_market': is_crossed_market,
+        'fair_value_gap': fair_value_gap,
+        
+        # Liquidity metrics
+        'total_yes_volume': total_yes_volume,
+        'total_no_volume': total_no_volume,
+        'liquidity_near_bid': liquidity_near_bid,
+        'liquidity_near_ask': liquidity_near_ask,
+    }
+    
+    return results
