@@ -181,30 +181,53 @@ def fetch_and_save_markets(client, tickers):
 
     for ticker_input in tickers:
         ticker_type = detect_ticker_type(ticker_input)
-        markets_response = None # Initialize response variable
+        all_markets_for_ticker = [] # Initialize list to accumulate markets
+        cursor = None # Initialize cursor
+
         try:
-            logger.debug(f"Fetching markets for {ticker_type}: {ticker_input}")
-            if ticker_type == 'series':
-                markets_response = client.get_markets(series_ticker=ticker_input)
-            elif ticker_type == 'event':
-                 markets_response = client.get_markets(event_ticker=ticker_input)
-            elif ticker_type == 'market':
-                 # For single market, get_market returns the market dict directly or None
-                 market_data = client.get_market(ticker=ticker_input)
-                 # Structure it like the get_markets response for consistent processing
-                 markets_response = {'markets': [market_data]} if market_data else {'markets': []}
-            else:
-                logger.warning(f"Unknown ticker type for {ticker_input}, skipping.")
-                continue
+            logger.info(f"Fetching markets for {ticker_type}: {ticker_input}")
 
-            # Extract the list of markets from the response dictionary
-            markets_list = markets_response.get('markets', []) if isinstance(markets_response, dict) else []
+            # Handle single market case separately (no pagination needed)
+            if ticker_type == 'market':
+                market_data = client.get_market(ticker=ticker_input)
+                if market_data:
+                    all_markets_for_ticker.append(market_data)
+                logger.info(f"Fetched {len(all_markets_for_ticker)} market for single ticker {ticker_input}")
 
-            logger.info(f"Fetched {len(markets_list)} markets for ticker {ticker_input}")
+            # Handle series and event cases with pagination
+            elif ticker_type in ['series', 'event']:
+                while True: # Loop until no more cursors
+                    params = {'cursor': cursor}
+                    if ticker_type == 'series':
+                        params['series_ticker'] = ticker_input
+                    else: # ticker_type == 'event'
+                        params['event_ticker'] = ticker_input
 
-            # Iterate over the extracted list
-            for market in markets_list:
-                 # Ensure market is a dictionary before proceeding
+                    logger.debug(f"Calling get_markets with params: {params}")
+                    markets_response = client.get_markets(**params)
+
+                    current_page_markets = markets_response.get('markets', []) if isinstance(markets_response, dict) else []
+                    if current_page_markets:
+                         all_markets_for_ticker.extend(current_page_markets)
+                         logger.debug(f"Accumulated {len(all_markets_for_ticker)} markets so far for {ticker_input}")
+
+                    # Check for next cursor
+                    cursor = markets_response.get('cursor') if isinstance(markets_response, dict) else None
+                    if not cursor:
+                        logger.debug(f"No more cursors found for {ticker_input}.")
+                        break # Exit pagination loop
+                    else:
+                         logger.debug(f"Found next cursor for {ticker_input}: {cursor[:10]}...")
+
+                logger.info(f"Finished fetching all pages. Total markets for {ticker_input}: {len(all_markets_for_ticker)}")
+
+            else: # Unknown type
+                logger.warning(f"Unknown ticker type for {ticker_input}, skipping fetch.")
+                continue # Skip to next ticker_input
+
+            # Now iterate over the accumulated list of all markets for this ticker_input
+            for market in all_markets_for_ticker:
+                 # Ensure market is a dictionary before proceeding (should be, but safety check)
                  if not isinstance(market, dict):
                       logger.warning(f"Skipping non-dictionary item found in markets list for {ticker_input}: {market}")
                       continue
