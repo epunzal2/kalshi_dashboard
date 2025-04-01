@@ -184,6 +184,23 @@ class KalshiHttpClient(KalshiBaseClient):
 
         # Note: Communications and Collection methods are not implemented yet.
 
+        # Fetch initial exchange status on initialization
+        self.logger.info("Fetching initial exchange status...")
+        try:
+            # Use the instance's own get method
+            status_response = self.get_exchange_status()
+            # Check for the actual keys in the response based on logs {'exchange_active': True, 'trading_active': True}
+            if status_response and 'exchange_active' in status_response and 'trading_active' in status_response:
+                # Log the actual status details
+                self.logger.info(f"Initial Exchange Status: Active={status_response['exchange_active']}, Trading={status_response['trading_active']}")
+                # Optionally store it if needed later: self.initial_exchange_status = status_response
+            else:
+                self.logger.warning(f"Could not retrieve valid initial exchange status structure. Response: {status_response}")
+        except Exception as init_status_err:
+            # Log error but allow client initialization to continue
+            self.logger.error(f"Failed to fetch initial exchange status during client init: {init_status_err}", exc_info=False)
+
+
     def rate_limit(self) -> None:
         """
         Ensures requests do not exceed the API rate limit by introducing a small delay if necessary.
@@ -2006,13 +2023,18 @@ def calculate_bid_ask_spread(orderbook):
     if not isinstance(orderbook, dict) or 'orderbook' not in orderbook:
         raise ValueError('Invalid orderbook format. Expected {orderbook: {yes: [...], no: [...]}}')
     
-    if 'yes' not in orderbook['orderbook'] or 'no' not in orderbook['orderbook']:
-        raise ValueError('Invalid orderbook format. Expected both yes and no arrays')
-    
-    # Sort arrays by price
-    yes_bids = sorted(orderbook['orderbook']['yes'], key=lambda x: x[0], reverse=True)
-    no_asks = sorted(orderbook['orderbook']['no'], key=lambda x: x[0])
-    
+    # Safely get 'yes' and 'no' lists, defaulting to empty list if key is missing or value is None
+    yes_bids_raw = orderbook['orderbook'].get('yes', [])
+    no_asks_raw = orderbook['orderbook'].get('no', [])
+
+    # Ensure we have lists before sorting
+    yes_bids_list = yes_bids_raw if isinstance(yes_bids_raw, list) else []
+    no_asks_list = no_asks_raw if isinstance(no_asks_raw, list) else []
+
+    # Sort arrays by price if they are not empty
+    yes_bids = sorted(yes_bids_list, key=lambda x: x[0], reverse=True) if yes_bids_list else []
+    no_asks = sorted(no_asks_list, key=lambda x: x[0]) if no_asks_list else []
+
     # Get best bid (highest price someone is willing to buy at)
     best_bid = yes_bids[0][0] if yes_bids else 0
     best_bid_volume = yes_bids[0][1] if yes_bids else 0
@@ -2027,22 +2049,26 @@ def calculate_bid_ask_spread(orderbook):
     
     # Calculate mid price
     mid_price = (best_bid + best_ask) / 2
-    
-    # Calculate total volumes
-    total_yes_volume = sum(order[1] for order in orderbook['orderbook']['yes'])
-    total_no_volume = sum(order[1] for order in orderbook['orderbook']['no'])
-    
-    # Calculate liquidity within 5¢ of best prices
+
+    # Ensure lists are valid before summing or calculating liquidity
+    yes_bids_list_for_calc = yes_bids_list if isinstance(yes_bids_list, list) else []
+    no_asks_list_for_calc = no_asks_list if isinstance(no_asks_list, list) else []
+
+    # Calculate total volumes using the validated lists
+    total_yes_volume = sum(order[1] for order in yes_bids_list_for_calc)
+    total_no_volume = sum(order[1] for order in no_asks_list_for_calc)
+
+    # Calculate liquidity within 5¢ of best prices using validated lists
     liquidity_near_bid = sum(
-        order[1] for order in orderbook['orderbook']['yes'] 
+        order[1] for order in yes_bids_list_for_calc
         if 0 <= best_bid - order[0] <= 5
     )
-    
+
     liquidity_near_ask = sum(
-        order[1] for order in orderbook['orderbook']['no']
+        order[1] for order in no_asks_list_for_calc
         if 0 <= order[0] - best_ask <= 5
     )
-    
+
     # Check for crossed market (negative spread)
     is_crossed_market = spread < 0
     

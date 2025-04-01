@@ -2,6 +2,7 @@
 services:
   kalshi-dashboard:           # Name of your service
     build: .                  # Use Dockerfile in current directory
+    image: kalshi-dashboard:data-fetcher-orderbook   # Specify image name and tag
     ports:
       - "8080:8080"           # Map port 8080 from container to host
     volumes:

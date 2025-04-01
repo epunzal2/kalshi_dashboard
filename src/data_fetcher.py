@@ -12,7 +12,8 @@ import traceback # Import traceback
 
 print("--- data_fetcher.py START ---", flush=True) # <<< ADDED
 
-from src.clients import KalshiHttpClient, Environment, detect_ticker_type
+from src.clients import KalshiHttpClient, Environment, detect_ticker_type, calculate_bid_ask_spread # Added calculate_bid_ask_spread
+from requests.exceptions import HTTPError # Added for specific error handling
 
 # ---- Configuration ----
 load_dotenv() # Load .env file for local development
@@ -180,26 +181,34 @@ def fetch_and_save_markets(client, tickers):
 
     for ticker_input in tickers:
         ticker_type = detect_ticker_type(ticker_input)
-        markets = []
+        markets_response = None # Initialize response variable
         try:
             logger.debug(f"Fetching markets for {ticker_type}: {ticker_input}")
             if ticker_type == 'series':
-                markets = client.get_markets(series_ticker=ticker_input)
+                markets_response = client.get_markets(series_ticker=ticker_input)
             elif ticker_type == 'event':
-                 markets = client.get_markets(event_ticker=ticker_input)
+                 markets_response = client.get_markets(event_ticker=ticker_input)
             elif ticker_type == 'market':
-                 # Assuming get_market method exists or get_markets can handle single market tickers
-                 # Adjust if API requires a different method for single market tickers
-                 market_data = client.get_market(ticker=ticker_input) # Hypothetical method
-                 markets = [market_data] if market_data else []
+                 # For single market, get_market returns the market dict directly or None
+                 market_data = client.get_market(ticker=ticker_input)
+                 # Structure it like the get_markets response for consistent processing
+                 markets_response = {'markets': [market_data]} if market_data else {'markets': []}
             else:
                 logger.warning(f"Unknown ticker type for {ticker_input}, skipping.")
                 continue
 
-            logger.info(f"Fetched {len(markets)} markets for ticker {ticker_input}")
+            # Extract the list of markets from the response dictionary
+            markets_list = markets_response.get('markets', []) if isinstance(markets_response, dict) else []
 
-            for market in markets:
-                try:
+            logger.info(f"Fetched {len(markets_list)} markets for ticker {ticker_input}")
+
+            # Iterate over the extracted list
+            for market in markets_list:
+                 # Ensure market is a dictionary before proceeding
+                 if not isinstance(market, dict):
+                      logger.warning(f"Skipping non-dictionary item found in markets list for {ticker_input}: {market}")
+                      continue
+                 try:
                     # Determine the correct series/event based on the INPUT ticker type
                     series_ticker_from_input = ticker_input if ticker_type == 'series' else None
                     event_ticker_from_input = ticker_input if ticker_type == 'event' else None
@@ -239,7 +248,46 @@ def fetch_and_save_markets(client, tickers):
                         logger.warning(f"Market data missing 'ticker' field for item under {ticker_input}. Data: {market}")
                         continue
 
-                    # Add fetch timestamp
+                    # --- Add Order Book and Spread Metrics ---
+                    orderbook_data = None
+                    spread_metrics = None
+                    if market_ticker != 'unknown_market': # Only fetch if we have a valid ticker
+                        try:
+                            logger.info(f"Fetching order book for {market_ticker} (depth=20)...")
+                            # Use the existing client instance passed to the function
+                            orderbook_response = client.get_market_orderbook(ticker=market_ticker, depth=20)
+
+                            if orderbook_response and 'orderbook' in orderbook_response:
+                                # Store the raw orderbook structure {yes: [...], no: [...]}
+                                orderbook_data = orderbook_response['orderbook']
+                                logger.debug(f"Successfully fetched order book for {market_ticker}.")
+
+                                # Calculate spread metrics using the raw response dict
+                                logger.info(f"Calculating spread metrics for {market_ticker}...")
+                                spread_metrics = calculate_bid_ask_spread(orderbook_response) # Pass the full response dict
+                                logger.debug(f"Calculated spread metrics for {market_ticker}: {spread_metrics}")
+                            else:
+                                logger.warning(f"Order book response for {market_ticker} was empty or invalid: {orderbook_response}")
+
+                        except HTTPError as http_err:
+                            # Log specific HTTP errors
+                            if http_err.response.status_code == 404:
+                                logger.warning(f"Order book not found (404) for market {market_ticker}. Skipping spread calculation.")
+                            else:
+                                logger.error(f"HTTP error fetching order book for {market_ticker}: {http_err}", exc_info=False)
+                        except ValueError as val_err:
+                             # Catch potential errors from calculate_bid_ask_spread if format is bad
+                             logger.error(f"Error calculating spread for {market_ticker} (likely invalid orderbook format): {val_err}", exc_info=False)
+                        except Exception as e:
+                            logger.error(f"Unexpected error fetching/calculating spread for {market_ticker}: {e}", exc_info=True)
+
+                    # Add the fetched/calculated data (or None if errors occurred)
+                    market['orderbook_depth_20'] = orderbook_data
+                    market['spread_metrics'] = spread_metrics
+                    # --- End Order Book / Spread ---
+
+
+                    # Add fetch timestamp (already exists)
                     market['fetch_timestamp'] = fetch_timestamp_str
 
                     # --- Saving Logic (Append Mode) ---
@@ -317,13 +365,15 @@ def fetch_and_save_markets(client, tickers):
                             continue # Skip saved_count increment
 
                     saved_count += 1
-
-                except Exception as e:
-                    logger.error(f"Failed to process/save market {market.get('ticker', 'N/A')}: {e}")
+                 # This except block catches errors during the processing of a single market
+                 # (e.g., fetching orderbook, calculating spread, saving) - CORRECTED INDENTATION
+                 except Exception as market_proc_err:
+                    logger.error(f"Failed to process/save market {market.get('ticker', 'N/A')}: {market_proc_err}")
                     error_count += 1
-
-        except Exception as e:
-            logger.error(f"Failed to fetch markets for {ticker_input}: {str(e)}")
+        # This except block catches errors during the initial fetch for the ticker_input
+        # (e.g., client.get_markets fails)
+        except Exception as fetch_err:
+            logger.error(f"Failed to fetch markets for {ticker_input}: {str(fetch_err)}")
             error_count += 1
 
     logger.info(f"Market data fetch completed. Saved: {saved_count}, Errors: {error_count}")
@@ -347,9 +397,10 @@ def run_fetcher():
     start_time = datetime.now()
 
     try:
-        # Log environment variables for debugging
-        print(f"--- Environment variables: {os.environ} ---", flush=True) # <<< ADDED (use print for early debug)
-        logger.info(f"Environment variables: {os.environ}") # Keep logger too
+        # Log environment variables for debugging - REMOVED SENSITIVE LOGGING
+        # print(f"--- Environment variables: {os.environ} ---", flush=True) # <<< REMOVED
+        # logger.info(f"Environment variables: {os.environ}") # <<< REMOVED
+        logger.info("Starting /run endpoint processing.") # Added generic start log
 
         # --- Deferred GCP Client Initialization ---
         if not LOCAL_MODE:
@@ -373,20 +424,23 @@ def run_fetcher():
         # --- End Deferred Initialization ---
 
 
-        # Attempt to access a secret to verify Secret Manager access (NOW uses the initialized client)
-        print("--- Attempting test secret access ---", flush=True) # <<< ADDED
-        try:
-            # Make sure access_secret_version uses the potentially newly initialized client
-            if not LOCAL_MODE and secret_manager_client is None:
-                 raise RuntimeError("Secret Manager client should have been initialized but is None.")
-            test_secret = access_secret_version("prod-keyid") # This function needs the client
-            print(f"--- Successfully accessed test secret: prod-keyid ---", flush=True) # <<< ADDED
-            logger.info(f"Successfully accessed test secret: prod-keyid")
-        except Exception as secret_err:
-            print(f"--- Failed to access test secret: {type(secret_err).__name__} ---", flush=True) # <<< ADDED
-            logger.error(f"Failed to access test secret: {type(secret_err).__name__}")
-            # Decide if this is fatal - maybe return 500?
-            # return jsonify({"status": "error", "message": f"Failed test secret access: {secret_err}"}), 500
+        # --- Test Secret Access (Only if NOT in Local Mode) ---
+        if not LOCAL_MODE:
+            print("--- Attempting test secret access ---", flush=True)
+            try:
+                if secret_manager_client is None:
+                     raise RuntimeError("Secret Manager client should have been initialized but is None.")
+                test_secret = access_secret_version("prod-keyid")
+                print(f"--- Successfully accessed test secret: prod-keyid ---", flush=True)
+                logger.info(f"Successfully accessed test secret: prod-keyid")
+            except Exception as secret_err:
+                print(f"--- Failed to access test secret: {type(secret_err).__name__} ---", flush=True)
+                logger.error(f"Failed to access test secret: {type(secret_err).__name__}")
+                # Decide if this is fatal
+                # return jsonify({"status": "error", "message": f"Failed test secret access: {secret_err}"}), 500
+        else:
+            print("--- Skipping test secret access (LOCAL_MODE=True) ---", flush=True)
+        # --- End Test Secret Access ---
 
 
         # Determine environment (e.g., based on an env var, default to PROD if not set)
